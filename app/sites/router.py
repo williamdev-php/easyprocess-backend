@@ -55,7 +55,7 @@ async def resolve_site(
         result = await db.execute(
             select(GeneratedSite).where(
                 GeneratedSite.subdomain == subdomain,
-                GeneratedSite.status == SiteStatus.PUBLISHED,
+                GeneratedSite.status != SiteStatus.ARCHIVED,
             )
         )
         site = result.scalar_one_or_none()
@@ -81,7 +81,7 @@ async def resolve_site(
             result = await db.execute(
                 select(GeneratedSite).where(
                     GeneratedSite.id == cd.site_id,
-                    GeneratedSite.status == SiteStatus.PUBLISHED,
+                    GeneratedSite.status != SiteStatus.ARCHIVED,
                 )
             )
             site = result.scalar_one_or_none()
@@ -91,7 +91,7 @@ async def resolve_site(
             result = await db.execute(
                 select(GeneratedSite).where(
                     GeneratedSite.custom_domain == domain,
-                    GeneratedSite.status == SiteStatus.PUBLISHED,
+                    GeneratedSite.status != SiteStatus.ARCHIVED,
                 )
             )
             site = result.scalar_one_or_none()
