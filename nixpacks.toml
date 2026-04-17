@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["...", "playwright-driver.browsers"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt", "playwright install chromium"]
+
+[variables]
+PLAYWRIGHT_BROWSERS_PATH = "/app/.playwright"
