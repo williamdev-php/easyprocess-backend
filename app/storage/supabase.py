@@ -1,0 +1,75 @@
+"""Supabase Storage helpers for file upload, deletion, and health checks."""
+
+import uuid
+
+import httpx
+
+from app.config import settings
+
+
+def _headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
+    }
+
+
+def _make_key(file_name: str, prefix: str = "uploads") -> str:
+    """Generate a unique object key to avoid collisions."""
+    ext = ""
+    if "." in file_name:
+        ext = file_name.rsplit(".", 1)[-1]
+    unique = uuid.uuid4().hex[:12]
+    return f"{prefix}/{unique}.{ext}" if ext else f"{prefix}/{unique}"
+
+
+def upload_file(
+    file_data: bytes,
+    file_name: str,
+    content_type: str = "application/octet-stream",
+    prefix: str = "uploads",
+) -> str:
+    """Upload a file to Supabase Storage and return its public URL."""
+    key = _make_key(file_name, prefix=prefix)
+    bucket = settings.SUPABASE_STORAGE_BUCKET
+    url = f"{settings.supabase_storage_url}/object/{bucket}/{key}"
+
+    resp = httpx.post(
+        url,
+        headers={**_headers(), "Content-Type": content_type},
+        content=file_data,
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+
+    return f"{settings.supabase_storage_url}/object/public/{bucket}/{key}"
+
+
+def delete_file(url: str) -> None:
+    """Delete a file from Supabase Storage given its public URL."""
+    public_prefix = f"{settings.supabase_storage_url}/object/public/{settings.SUPABASE_STORAGE_BUCKET}/"
+    if url.startswith(public_prefix):
+        key = url[len(public_prefix):]
+    else:
+        key = url
+
+    bucket = settings.SUPABASE_STORAGE_BUCKET
+    resp = httpx.delete(
+        f"{settings.supabase_storage_url}/object/{bucket}/{key}",
+        headers=_headers(),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+
+
+def check_storage_health() -> bool:
+    """Verify the Supabase Storage bucket exists and is accessible."""
+    try:
+        resp = httpx.get(
+            f"{settings.supabase_storage_url}/bucket/{settings.SUPABASE_STORAGE_BUCKET}",
+            headers=_headers(),
+            timeout=5.0,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
