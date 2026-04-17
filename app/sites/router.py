@@ -146,6 +146,8 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
             slugs.append("kontakt")
         response.append({
             "id": site.id,
+            "subdomain": site.subdomain,
+            "custom_domain": site.custom_domain,
             "updated_at": (site.updated_at or site.created_at).isoformat() if (site.updated_at or site.created_at) else None,
             "slugs": slugs,
         })

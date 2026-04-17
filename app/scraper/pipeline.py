@@ -24,6 +24,7 @@ from app.cache import cache
 from app.scraper.extractor import extract_all, fetch_page
 from app.scraper.image_downloader import download_and_store_images
 from app.scraper.screenshot import capture_screenshot_bytes
+from app.sites.subdomain import generate_unique_subdomain
 from app.sites.models import (
     GeneratedSite,
     Lead,
@@ -206,7 +207,15 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 site.generation_cost_usd = gen_result.cost_usd
                 site.status = SiteStatus.DRAFT
                 site.updated_at = datetime.now(timezone.utc)
+                # Ensure subdomain is set (backfill if missing)
+                if not site.subdomain:
+                    site.subdomain = await generate_unique_subdomain(
+                        db, lead.business_name, lead.website_url, exclude_site_id=site.id
+                    )
             else:
+                subdomain = await generate_unique_subdomain(
+                    db, lead.business_name, lead.website_url
+                )
                 site = GeneratedSite(
                     lead_id=lead.id,
                     site_data=site_data,
@@ -214,6 +223,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     ai_model=gen_result.model,
                     generation_cost_usd=gen_result.cost_usd,
                     status=SiteStatus.DRAFT,
+                    subdomain=subdomain,
                 )
                 db.add(site)
 

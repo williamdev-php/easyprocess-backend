@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.database import async_session
 from app.auth.models import User  # noqa: F401 - needed for FK resolution
 from app.sites.models import Lead, GeneratedSite, LeadStatus, SiteStatus
+from app.sites.subdomain import generate_unique_subdomain
 
 DEMO_SITE_DATA = {
     "meta": {
@@ -172,25 +173,30 @@ async def seed():
         session.add(lead)
         await session.flush()
 
+        subdomain = await generate_unique_subdomain(
+            session, lead.business_name, lead.website_url
+        )
         site = GeneratedSite(
             lead_id=lead.id,
             site_data=DEMO_SITE_DATA,
             template="modern",
             status=SiteStatus.PUBLISHED,
+            subdomain=subdomain,
         )
         session.add(site)
         await session.flush()
         await session.commit()
 
         print(f"\nDemo site seeded!")
-        print(f"  Lead ID:  {lead.id}")
-        print(f"  Site ID:  {site.id}")
+        print(f"  Lead ID:    {lead.id}")
+        print(f"  Site ID:    {site.id}")
+        print(f"  Subdomain:  {subdomain}")
         print(f"\nRoutes:")
-        print(f"  Home:     http://localhost:3001/{site.id}")
-        print(f"  Om oss:   http://localhost:3001/{site.id}/om-oss")
-        print(f"  Tjänster: http://localhost:3001/{site.id}/tjanster")
-        print(f"  Galleri:  http://localhost:3001/{site.id}/galleri")
-        print(f"  Kontakt:  http://localhost:3001/{site.id}/kontakt")
+        print(f"  Home:     http://{subdomain}.localhost:3001")
+        print(f"  Om oss:   http://{subdomain}.localhost:3001/om-oss")
+        print(f"  Tjänster: http://{subdomain}.localhost:3001/tjanster")
+        print(f"  Galleri:  http://{subdomain}.localhost:3001/galleri")
+        print(f"  Kontakt:  http://{subdomain}.localhost:3001/kontakt")
 
 
 if __name__ == "__main__":

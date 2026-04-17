@@ -39,7 +39,7 @@ def _wrap_layout(inner_html: str) -> str:
 
         <!-- Header -->
         <tr><td style="background:#326586; padding:28px 40px; text-align:center;">
-          <span style="color:#FFFFFF; font-size:24px; font-weight:700; letter-spacing:0.5px;">Qvicko</span>
+          <img src="https://qvicko.com/logo-sand-mist.png" alt="Qvicko" width="140" style="display:inline-block; height:auto; max-width:140px;" />
         </td></tr>
 
         <!-- Body -->
