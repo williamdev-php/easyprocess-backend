@@ -30,13 +30,19 @@ from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
-PLAN_FEATURES = [
+BASIC_FEATURES = [
+    "AI-genererade hemsidor",
+    "Egen domän",
+    "Grundläggande statistik",
+    "SEO-verktyg",
+]
+
+PRO_FEATURES = [
+    "Allt i Basic",
     "Obegränsat antal hemsidor",
     "Fullständig statistik",
-    "Egen domän",
     "Prioriterad support",
-    "SEO-verktyg",
-    "AI-genererade hemsidor",
+    "Avancerade SEO-verktyg",
 ]
 
 
@@ -136,12 +142,19 @@ class BillingQuery:
     async def available_plans(self) -> list[PlanType]:
         return [
             PlanType(
-                key="qvicko",
-                name="Qvicko",
+                key="basic",
+                name="Basic",
                 price_sek=19900,  # 199 SEK in öre
                 trial_days=30,
-                features=PLAN_FEATURES,
-            )
+                features=BASIC_FEATURES,
+            ),
+            PlanType(
+                key="pro",
+                name="Pro",
+                price_sek=29900,  # 299 SEK in öre
+                trial_days=30,
+                features=PRO_FEATURES,
+            ),
         ]
 
 

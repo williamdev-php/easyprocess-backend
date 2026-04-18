@@ -1,8 +1,9 @@
 """
 Stripe billing service for Qvicko subscriptions.
 
-Single plan: 199 SEK/month with 30-day free trial.
-Trial starts after site generation + first outreach email sent.
+Plans:
+- Basic: 199 SEK/month with 30-day free trial
+- Pro: 299 SEK/month with 30-day free trial
 """
 
 from __future__ import annotations
@@ -30,6 +31,17 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 TRIAL_DAYS = 30
+
+VALID_PLANS = {"basic", "pro"}
+
+
+def _get_price_id_for_plan(plan: str) -> str:
+    """Return the Stripe Price ID for a given plan key."""
+    if plan == "basic":
+        return settings.STRIPE_BASIC_PRICE_ID or settings.STRIPE_PRICE_ID
+    elif plan == "pro":
+        return settings.STRIPE_PRO_PRICE_ID
+    raise ValueError(f"Unknown plan: {plan}")
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +92,14 @@ async def create_subscription(
     db: AsyncSession,
     user: User,
     payment_method_id: str,
+    plan: str = "basic",
     with_trial: bool = True,
 ) -> Subscription:
     """
     Create a Stripe subscription for the user.
     Attaches payment method, sets as default, creates subscription with optional trial.
     """
+    price_id = _get_price_id_for_plan(plan)
     customer_id = await get_or_create_stripe_customer(db, user)
 
     # Attach payment method to customer and set as default
@@ -98,14 +112,14 @@ async def create_subscription(
     # Create subscription
     sub_params: dict = {
         "customer": customer_id,
-        "items": [{"price": settings.STRIPE_PRICE_ID}],
+        "items": [{"price": price_id}],
         "payment_behavior": "default_incomplete",
         "payment_settings": {
             "payment_method_types": ["card"],
             "save_default_payment_method": "on_subscription",
         },
         "expand": ["latest_invoice.payment_intent"],
-        "metadata": {"qvicko_user_id": user.id},
+        "metadata": {"qvicko_user_id": user.id, "qvicko_plan": plan},
     }
 
     if with_trial:
@@ -114,13 +128,14 @@ async def create_subscription(
     stripe_sub = stripe.Subscription.create(**sub_params)
 
     # Save subscription to DB
+    period_start, period_end = _get_period(stripe_sub)
     subscription = Subscription(
         user_id=user.id,
         stripe_subscription_id=stripe_sub.id,
         stripe_customer_id=customer_id,
         status=_map_stripe_status(stripe_sub.status),
-        current_period_start=_ts_to_dt(stripe_sub.current_period_start),
-        current_period_end=_ts_to_dt(stripe_sub.current_period_end),
+        current_period_start=_ts_to_dt(period_start),
+        current_period_end=_ts_to_dt(period_end),
         cancel_at_period_end=stripe_sub.cancel_at_period_end,
         trial_start=_ts_to_dt(stripe_sub.trial_start) if stripe_sub.trial_start else None,
         trial_end=_ts_to_dt(stripe_sub.trial_end) if stripe_sub.trial_end else None,
@@ -139,23 +154,25 @@ async def create_subscription(
 async def create_subscription_after_setup(
     db: AsyncSession,
     user: User,
+    plan: str = "basic",
     with_trial: bool = True,
 ) -> Subscription:
     """
     Create a subscription using the customer's default payment method
     (set via SetupIntent confirmation).
     """
+    price_id = _get_price_id_for_plan(plan)
     customer_id = await get_or_create_stripe_customer(db, user)
 
     sub_params: dict = {
         "customer": customer_id,
-        "items": [{"price": settings.STRIPE_PRICE_ID}],
+        "items": [{"price": price_id}],
         "payment_settings": {
             "payment_method_types": ["card"],
             "save_default_payment_method": "on_subscription",
         },
         "expand": ["latest_invoice.payment_intent"],
-        "metadata": {"qvicko_user_id": user.id},
+        "metadata": {"qvicko_user_id": user.id, "qvicko_plan": plan},
     }
 
     if with_trial:
@@ -163,13 +180,14 @@ async def create_subscription_after_setup(
 
     stripe_sub = stripe.Subscription.create(**sub_params)
 
+    period_start, period_end = _get_period(stripe_sub)
     subscription = Subscription(
         user_id=user.id,
         stripe_subscription_id=stripe_sub.id,
         stripe_customer_id=customer_id,
         status=_map_stripe_status(stripe_sub.status),
-        current_period_start=_ts_to_dt(stripe_sub.current_period_start),
-        current_period_end=_ts_to_dt(stripe_sub.current_period_end),
+        current_period_start=_ts_to_dt(period_start),
+        current_period_end=_ts_to_dt(period_end),
         cancel_at_period_end=stripe_sub.cancel_at_period_end,
         trial_start=_ts_to_dt(stripe_sub.trial_start) if stripe_sub.trial_start else None,
         trial_end=_ts_to_dt(stripe_sub.trial_end) if stripe_sub.trial_end else None,
@@ -339,7 +357,7 @@ async def upsert_billing_details(
 
 async def handle_subscription_created(db: AsyncSession, stripe_sub: stripe.Subscription) -> None:
     """Handle customer.subscription.created event."""
-    user_id = stripe_sub.metadata.get("qvicko_user_id")
+    user_id = _get_metadata(stripe_sub, "qvicko_user_id")
     if not user_id:
         # Try to find user by customer ID
         user = await _get_user_by_customer_id(db, stripe_sub.customer)
@@ -353,13 +371,14 @@ async def handle_subscription_created(db: AsyncSession, stripe_sub: stripe.Subsc
         _update_sub_from_stripe(existing, stripe_sub)
         db.add(existing)
     else:
+        period_start, period_end = _get_period(stripe_sub)
         sub = Subscription(
             user_id=user_id,
             stripe_subscription_id=stripe_sub.id,
             stripe_customer_id=stripe_sub.customer,
             status=_map_stripe_status(stripe_sub.status),
-            current_period_start=_ts_to_dt(stripe_sub.current_period_start),
-            current_period_end=_ts_to_dt(stripe_sub.current_period_end),
+            current_period_start=_ts_to_dt(period_start),
+            current_period_end=_ts_to_dt(period_end),
             cancel_at_period_end=stripe_sub.cancel_at_period_end,
             trial_start=_ts_to_dt(stripe_sub.trial_start) if stripe_sub.trial_start else None,
             trial_end=_ts_to_dt(stripe_sub.trial_end) if stripe_sub.trial_end else None,
@@ -408,28 +427,31 @@ async def handle_invoice_paid(db: AsyncSession, invoice: stripe.Invoice) -> None
         logger.warning("No user for customer %s on invoice %s", invoice.customer, invoice.id)
         return
 
+    pi_id = _get_invoice_payment_intent_id(invoice)
+
     # Deduplicate
-    if invoice.payment_intent:
+    if pi_id:
         existing = await db.execute(
-            select(Payment).where(Payment.stripe_payment_intent_id == invoice.payment_intent)
+            select(Payment).where(Payment.stripe_payment_intent_id == pi_id)
         )
         if existing.scalar_one_or_none():
             return
 
     # Find subscription
+    sub_id = _get_invoice_subscription_id(invoice)
     sub = None
-    if invoice.subscription:
-        sub = await get_subscription_by_stripe_id(db, invoice.subscription)
+    if sub_id:
+        sub = await get_subscription_by_stripe_id(db, sub_id)
 
     payment = Payment(
         user_id=user.id,
         subscription_id=sub.id if sub else None,
-        stripe_payment_intent_id=invoice.payment_intent,
+        stripe_payment_intent_id=pi_id,
         stripe_invoice_id=invoice.id,
         amount_sek=invoice.amount_paid,
         currency=invoice.currency or "sek",
         status=PaymentStatus.SUCCEEDED,
-        invoice_url=invoice.hosted_invoice_url,
+        invoice_url=getattr(invoice, "hosted_invoice_url", None),
     )
     db.add(payment)
 
@@ -460,9 +482,12 @@ async def handle_invoice_failed(db: AsyncSession, invoice: stripe.Invoice) -> No
     if not user:
         return
 
+    pi_id = _get_invoice_payment_intent_id(invoice)
+    sub_stripe_id = _get_invoice_subscription_id(invoice)
+
     sub = None
-    if invoice.subscription:
-        sub = await get_subscription_by_stripe_id(db, invoice.subscription)
+    if sub_stripe_id:
+        sub = await get_subscription_by_stripe_id(db, sub_stripe_id)
         if sub:
             sub.status = SubscriptionStatus.PAST_DUE
             db.add(sub)
@@ -470,12 +495,12 @@ async def handle_invoice_failed(db: AsyncSession, invoice: stripe.Invoice) -> No
     payment = Payment(
         user_id=user.id,
         subscription_id=sub.id if sub else None,
-        stripe_payment_intent_id=invoice.payment_intent,
+        stripe_payment_intent_id=pi_id,
         stripe_invoice_id=invoice.id,
         amount_sek=invoice.amount_due,
         currency=invoice.currency or "sek",
         status=PaymentStatus.FAILED,
-        invoice_url=invoice.hosted_invoice_url,
+        invoice_url=getattr(invoice, "hosted_invoice_url", None),
     )
     db.add(payment)
     await db.flush()
@@ -489,7 +514,7 @@ async def handle_invoice_failed(db: AsyncSession, invoice: stripe.Invoice) -> No
 
 async def handle_trial_will_end(db: AsyncSession, stripe_sub: stripe.Subscription) -> None:
     """Handle customer.subscription.trial_will_end event (3 days before trial ends)."""
-    user_id = stripe_sub.metadata.get("qvicko_user_id")
+    user_id = _get_metadata(stripe_sub, "qvicko_user_id")
     if not user_id:
         user = await _get_user_by_customer_id(db, stripe_sub.customer)
         if not user:
@@ -529,13 +554,102 @@ def _ts_to_dt(ts: int | None) -> datetime | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc)
 
 
+def _get_period(stripe_sub) -> tuple[int | None, int | None]:
+    """Extract current_period_start/end from a Stripe subscription.
+
+    In Stripe SDK v15+ (API 2025+), these fields moved from the
+    top-level subscription to items.data[*].
+    """
+    # Try top-level first (older API / SimpleNamespace in tests)
+    start = getattr(stripe_sub, "current_period_start", None)
+    end = getattr(stripe_sub, "current_period_end", None)
+    if start is not None and end is not None:
+        return start, end
+
+    # Fall back to items.data[0]
+    try:
+        item = stripe_sub.items.data[0] if hasattr(stripe_sub, "items") else None
+        if item:
+            return (
+                getattr(item, "current_period_start", None),
+                getattr(item, "current_period_end", None),
+            )
+    except (IndexError, AttributeError):
+        pass
+
+    return None, None
+
+
+def _get_metadata(obj, key: str, default=None):
+    """Safely get a metadata value from a Stripe object or dict."""
+    meta = getattr(obj, "metadata", None) or {}
+    if isinstance(meta, dict):
+        return meta.get(key, default)
+    # StripeObject — use bracket access
+    try:
+        return meta[key]
+    except (KeyError, AttributeError):
+        return default
+
+
 def _update_sub_from_stripe(sub: Subscription, stripe_sub: stripe.Subscription) -> None:
     sub.status = _map_stripe_status(stripe_sub.status)
-    sub.current_period_start = _ts_to_dt(stripe_sub.current_period_start)
-    sub.current_period_end = _ts_to_dt(stripe_sub.current_period_end)
+    period_start, period_end = _get_period(stripe_sub)
+    sub.current_period_start = _ts_to_dt(period_start)
+    sub.current_period_end = _ts_to_dt(period_end)
     sub.cancel_at_period_end = stripe_sub.cancel_at_period_end
     sub.trial_start = _ts_to_dt(stripe_sub.trial_start) if stripe_sub.trial_start else None
     sub.trial_end = _ts_to_dt(stripe_sub.trial_end) if stripe_sub.trial_end else None
+
+
+def _get_invoice_payment_intent_id(invoice) -> str | None:
+    """Extract payment_intent ID from an invoice.
+
+    In Stripe API 2025+, `invoice.payment_intent` was removed.
+    The PI is now under `invoice.payments.data[0].payment.payment_intent.id`.
+    """
+    # Legacy / SimpleNamespace (old API or mocks)
+    pi = getattr(invoice, "_data", {}).get("payment_intent") if hasattr(invoice, "_data") else getattr(invoice, "payment_intent", None)
+    if pi:
+        return pi if isinstance(pi, str) else getattr(pi, "id", pi)
+
+    # New API: payments.data[*].payment.payment_intent
+    try:
+        payments = invoice.payments
+        if payments and payments.data:
+            payment_obj = payments.data[0].payment
+            pi_obj = payment_obj.payment_intent if hasattr(payment_obj, "payment_intent") else None
+            if pi_obj:
+                return pi_obj.id if hasattr(pi_obj, "id") else pi_obj
+    except (AttributeError, IndexError):
+        pass
+
+    return None
+
+
+def _get_invoice_subscription_id(invoice) -> str | None:
+    """Extract subscription ID from an invoice.
+
+    In Stripe API 2025+, `invoice.subscription` was removed.
+    It's now under `invoice.parent.subscription_details.subscription`.
+    """
+    # Legacy / SimpleNamespace
+    sub = getattr(invoice, "_data", {}).get("subscription") if hasattr(invoice, "_data") else getattr(invoice, "subscription", None)
+    if sub:
+        return sub if isinstance(sub, str) else getattr(sub, "id", sub)
+
+    # New API: parent.subscription_details.subscription
+    try:
+        parent = invoice.parent
+        if parent and hasattr(parent, "subscription_details"):
+            sd = parent.subscription_details
+            if sd:
+                sub_val = sd.subscription if hasattr(sd, "subscription") else sd.get("subscription")
+                return sub_val
+    except (AttributeError, KeyError):
+        pass
+
+    return None
 
 
 async def _get_user_by_customer_id(db: AsyncSession, customer_id: str) -> User | None:

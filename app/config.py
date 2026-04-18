@@ -72,7 +72,9 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_PRICE_ID: str = ""  # The single 199 SEK/month price
+    STRIPE_PRICE_ID: str = ""  # Deprecated — use STRIPE_BASIC_PRICE_ID / STRIPE_PRO_PRICE_ID
+    STRIPE_BASIC_PRICE_ID: str = ""
+    STRIPE_PRO_PRICE_ID: str = ""
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"

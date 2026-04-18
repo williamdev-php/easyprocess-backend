@@ -57,8 +57,13 @@ async def create_setup_intent_endpoint(
 # Subscribe — after card collected via SetupIntent
 # ---------------------------------------------------------------------------
 
+class SubscribeRequest(BaseModel):
+    plan: str = "basic"  # "basic" or "pro"
+
+
 @router.post("/subscribe")
 async def subscribe_endpoint(
+    body: SubscribeRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -66,6 +71,12 @@ async def subscribe_endpoint(
     Create a subscription using the customer's default payment method.
     Call this after a SetupIntent has been confirmed on the frontend.
     """
+    if body.plan not in ("basic", "pro"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ogiltig plan. Välj 'basic' eller 'pro'.",
+        )
+
     # Check if user already has an active subscription
     existing = await get_active_subscription(db, user.id)
     if existing:
@@ -74,11 +85,12 @@ async def subscribe_endpoint(
             detail="Du har redan en aktiv prenumeration.",
         )
 
-    sub = await create_subscription_after_setup(db, user, with_trial=True)
+    sub = await create_subscription_after_setup(db, user, plan=body.plan, with_trial=True)
     return {
         "subscription_id": sub.id,
         "stripe_subscription_id": sub.stripe_subscription_id,
         "status": sub.status.value,
+        "plan": body.plan,
         "trial_end": sub.trial_end.isoformat() if sub.trial_end else None,
     }
 

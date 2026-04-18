@@ -18,6 +18,7 @@ from app.sites.models import Lead, LeadStatus
 # Import all model modules to register on Base.metadata
 import app.auth.models  # noqa: F401
 import app.sites.models  # noqa: F401
+import app.billing.models  # noqa: F401
 
 
 @pytest.fixture(scope="session")
