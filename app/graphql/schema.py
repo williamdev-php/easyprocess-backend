@@ -33,8 +33,16 @@ class GraphQLRateLimitExtension(SchemaExtension):
             return
 
         # Only rate-limit mutations
-        operation = self.execution_context.operation
-        if operation and operation.operation.value == "mutation":
+        from graphql import OperationType
+
+        doc = self.execution_context.graphql_document
+        is_mutation = (
+            doc is not None
+            and doc.definitions
+            and getattr(doc.definitions[0], "operation", None)
+            == OperationType.MUTATION
+        )
+        if is_mutation:
             ip = request.client.host if request.client else "unknown"
             now = time.monotonic()
             bucket = self._buckets[ip]
