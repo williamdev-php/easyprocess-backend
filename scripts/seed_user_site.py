@@ -53,7 +53,7 @@ XNAILS_SITE_DATA = {
     "hero": {
         "headline": "Vackra naglar, varje gång",
         "subtitle": "Välkommen till XNails — Stockholms mest omtyckta nagelsalong. Vi erbjuder professionell nagelvård med fokus på kvalitet, hygien och din trivsel.",
-        "cta": {"label": "Boka tid nu", "href": "#kontakt"},
+        "cta": {"label": "Boka tid nu", "href": "#contact"},
         "background_image": None,
     },
     "about": {
@@ -220,7 +220,7 @@ XNAILS_SITE_DATA = {
     "cta": {
         "title": "Redo för nya naglar?",
         "text": "Boka din tid idag och upplev skillnaden med professionell nagelvård hos XNails.",
-        "button": {"label": "Boka din tid", "href": "#kontakt"},
+        "button": {"label": "Boka din tid", "href": "#contact"},
     },
     "contact": {
         "title": "Kontakta oss",

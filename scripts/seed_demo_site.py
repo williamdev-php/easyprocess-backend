@@ -46,7 +46,7 @@ DEMO_SITE_DATA = {
     "hero": {
         "headline": "Bygger dina drömmar sedan 1999",
         "subtitle": "Från idé till färdigt resultat — vi är Göteborgs mest pålitliga byggfirma med över 25 års erfarenhet av nybyggnation, renovering och tillbyggnader.",
-        "cta": {"label": "Begär kostnadsfri offert", "href": "#kontakt"},
+        "cta": {"label": "Begär kostnadsfri offert", "href": "#contact"},
         "background_image": None,
     },
     "about": {
@@ -129,7 +129,7 @@ DEMO_SITE_DATA = {
     "cta": {
         "title": "Redo att starta ditt projekt?",
         "text": "Kontakta oss idag för en kostnadsfri konsultation och offert. Vi hjälper dig att förverkliga dina byggdrömmar.",
-        "button": {"label": "Kontakta oss nu", "href": "#kontakt"},
+        "button": {"label": "Kontakta oss nu", "href": "#contact"},
     },
     "contact": {
         "title": "Kontakta oss",
@@ -193,10 +193,10 @@ async def seed():
         print(f"  Subdomain:  {subdomain}")
         print(f"\nRoutes:")
         print(f"  Home:     http://{subdomain}.localhost:3001")
-        print(f"  Om oss:   http://{subdomain}.localhost:3001/om-oss")
-        print(f"  Tjänster: http://{subdomain}.localhost:3001/tjanster")
-        print(f"  Galleri:  http://{subdomain}.localhost:3001/galleri")
-        print(f"  Kontakt:  http://{subdomain}.localhost:3001/kontakt")
+        print(f"  About:    http://{subdomain}.localhost:3001/about")
+        print(f"  Services: http://{subdomain}.localhost:3001/services")
+        print(f"  Gallery:  http://{subdomain}.localhost:3001/gallery")
+        print(f"  Contact:  http://{subdomain}.localhost:3001/contact")
 
 
 if __name__ == "__main__":

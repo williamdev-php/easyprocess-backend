@@ -616,12 +616,12 @@ def _get_best_srcset_url(srcset: str, base_url: str) -> str | None:
                 try:
                     width = int(desc[:-1])
                 except ValueError:
-                    pass
+                    logger.debug("Malformed srcset width descriptor: %s", desc)
             elif desc.endswith("x"):
                 try:
                     width = int(float(desc[:-1]) * 1000)
                 except ValueError:
-                    pass
+                    logger.debug("Malformed srcset density descriptor: %s", desc)
         candidates.append((url, width))
 
     if not candidates:

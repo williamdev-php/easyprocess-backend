@@ -70,8 +70,8 @@ def _check_image_dimensions(data: bytes, content_type: str) -> tuple[int, int] |
                     height = ((bits >> 14) & 0x3FFF) + 1
                     return (width, height)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to parse image dimensions (%s): %s", content_type, e)
     return None
 
 

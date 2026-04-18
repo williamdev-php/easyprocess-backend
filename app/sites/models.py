@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -308,6 +309,7 @@ class PageView(Base):
         Index("idx_page_views_created_at", "created_at"),
         Index("idx_page_views_site_created", "site_id", "created_at"),
         Index("idx_page_views_visitor_id", "visitor_id"),
+        Index("idx_page_views_visitor_created", "visitor_id", "created_at"),
         Index("idx_page_views_session_id", "session_id"),
         {"schema": SCHEMA},
     )
@@ -391,6 +393,11 @@ class CustomDomain(Base):
         Index("idx_custom_domains_user_id", "user_id"),
         Index("idx_custom_domains_domain", "domain"),
         Index("idx_custom_domains_site_id", "site_id"),
+        # Domain format validation — length + basic char check (works on both PostgreSQL and SQLite)
+        CheckConstraint(
+            "length(domain) >= 4 AND length(domain) <= 255 AND domain NOT LIKE '% %'",
+            name="ck_custom_domains_domain_format",
+        ),
         {"schema": SCHEMA},
     )
 

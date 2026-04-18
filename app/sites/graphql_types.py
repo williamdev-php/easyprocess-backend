@@ -152,6 +152,17 @@ class CreateLeadInput:
     business_name: str | None = None
     industry: str | None = None
 
+    def __post_init__(self) -> None:
+        from urllib.parse import urlparse
+
+        url = self.website_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        parsed = urlparse(url)
+        if not parsed.hostname or "." not in parsed.hostname:
+            raise ValueError(f"Invalid website URL: {self.website_url}")
+        self.website_url = url
+
 
 @strawberry.input
 class UpdateSiteDataInput:

@@ -27,8 +27,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Create schema and tables on startup (dev convenience; use Alembic in production)
+    # Verify DB connectivity, then create schema/tables (dev convenience; use Alembic in production)
     async with engine.begin() as conn:
+        try:
+            await conn.execute(text("SELECT 1"))
+            logger.info("Database connection verified")
+        except Exception as e:
+            logger.error("Database connection failed: %s", e)
+            raise RuntimeError("Cannot connect to database") from e
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)
 
@@ -65,9 +71,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
+    # Graceful shutdown: cancel background tasks and let in-flight work drain.
     expiration_task.cancel()
+    try:
+        await expiration_task
+    except asyncio.CancelledError:
+        pass
     await cache.close()
     await engine.dispose()
+    logger.info("Shutdown complete")
 
 
 app = FastAPI(

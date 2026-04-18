@@ -55,9 +55,6 @@ class Settings(BaseSettings):
     EMAIL_HELP: str = "help@qvicko.com"
     EMAIL_NOREPLY: str = "noreply@qvicko.com"
 
-    # Cloudflare (for subdomain DNS management)
-    CLOUDFLARE_API_TOKEN: str = ""
-    CLOUDFLARE_ZONE_ID: str = ""
     BASE_DOMAIN: str = "qvicko.se"  # e.g. slug.qvicko.se
 
     # Vercel (for custom domain management on viewer project)

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,13 +137,13 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
         # Derive available page slugs from content blocks
         slugs = []
         if data.get("about"):
-            slugs.append("om-oss")
+            slugs.append("about")
         if data.get("services"):
-            slugs.append("tjanster")
+            slugs.append("services")
         if data.get("gallery"):
-            slugs.append("galleri")
+            slugs.append("gallery")
         if data.get("business", {}).get("email") or data.get("business", {}).get("phone") or data.get("contact"):
-            slugs.append("kontakt")
+            slugs.append("contact")
         response.append({
             "id": site.id,
             "subdomain": site.subdomain,
@@ -248,13 +248,13 @@ async def get_sitemap(
     # Derive pages from content blocks
     page_slugs = [""]  # Home always
     if site_data.get("about"):
-        page_slugs.append("om-oss")
+        page_slugs.append("about")
     if site_data.get("services"):
-        page_slugs.append("tjanster")
+        page_slugs.append("services")
     if site_data.get("gallery"):
-        page_slugs.append("galleri")
+        page_slugs.append("gallery")
     if site_data.get("business", {}).get("email") or site_data.get("contact"):
-        page_slugs.append("kontakt")
+        page_slugs.append("contact")
 
     urlset = Element("urlset")
     urlset.set("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9")
@@ -390,7 +390,7 @@ async def track_view(
         site.views += 1
 
     await db.commit()
-    await cache.delete(f"site:data:{site_id}")
+    # Cache invalidation removed — rely on TTL (1h) instead of invalidating on every view.
     return {"ok": True}
 
 
@@ -399,9 +399,9 @@ async def track_view(
 # ---------------------------------------------------------------------------
 
 class ContactPayload(BaseModel):
-    name: str
-    email: str
-    message: str
+    name: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    message: str = Field(min_length=1, max_length=5000)
 
 
 @router.post("/{site_id}/contact")
@@ -418,19 +418,11 @@ async def submit_contact(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Site not found")
 
-    # Basic validation
-    name = payload.name.strip()[:255]
-    email = payload.email.strip()[:255]
-    message = payload.message.strip()[:5000]
-
-    if not name or not email or not message:
-        raise HTTPException(status_code=400, detail="All fields are required")
-
     contact_msg = ContactMessage(
         site_id=site_id,
-        name=name,
-        email=email,
-        message=message,
+        name=payload.name.strip(),
+        email=payload.email.strip(),
+        message=payload.message.strip(),
     )
     db.add(contact_msg)
     await db.commit()

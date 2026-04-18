@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
+stripe.max_network_retries = 2
+stripe.default_http_client = stripe.HTTPXClient(timeout=30, allow_sync_methods=True)
 
 TRIAL_DAYS = 30
 
@@ -277,6 +279,7 @@ async def list_payment_methods(user: User) -> list[dict]:
     methods = stripe.PaymentMethod.list(
         customer=user.stripe_customer_id,
         type="card",
+        limit=10,
     )
 
     return [

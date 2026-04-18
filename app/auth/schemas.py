@@ -87,6 +87,20 @@ class UpdateProfileRequest(BaseModel):
     billing_zip: str | None = None
     billing_country: str | None = None
 
+    @field_validator("avatar_url")
+    @classmethod
+    def validate_avatar_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not v.startswith("https://"):
+            raise ValueError("Avatar URL must use HTTPS")
+        if len(v) > 2048:
+            raise ValueError("Avatar URL too long")
+        return v
+
 
 class SessionResponse(BaseModel):
     id: str

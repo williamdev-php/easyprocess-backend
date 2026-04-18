@@ -1298,10 +1298,7 @@ class SiteMutation:
                 if vercel_data:
                     vercel_info = _extract_vercel_verification(vercel_data)
             except Exception:
-                logger.warning("Vercel verification failed for %s, falling back to DNS check", domain.domain)
-                # Fallback: direct DNS check
-                from app.sites.cloudflare import verify_custom_domain
-                verified = await verify_custom_domain(domain.domain)
+                logger.warning("Vercel verification failed for %s", domain.domain)
 
             if verified:
                 domain.status = DomainStatus.ACTIVE
@@ -1362,13 +1359,6 @@ class SiteMutation:
             site.subdomain = subdomain
             site.updated_at = datetime.now(timezone.utc)
             await db.commit()
-
-            # Create DNS record in Cloudflare (best-effort)
-            from app.sites.cloudflare import create_subdomain_record
-            try:
-                await create_subdomain_record(subdomain)
-            except Exception:
-                logger.warning("Failed to create Cloudflare record for %s", subdomain)
 
             # Log the change
             await log_settings_change(

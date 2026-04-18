@@ -11,6 +11,8 @@ import asyncio
 import logging
 import re
 import sys
+
+import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -109,8 +111,10 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     favicon_url=data.get("favicon_url"),
                 )
                 logger.info("Downloaded %d images for %s", len(data["images"]), lead.website_url)
+            except (httpx.TimeoutException, httpx.ConnectError) as img_err:
+                logger.warning("Network error downloading images for %s: %s", lead.website_url, img_err)
             except Exception as img_err:
-                logger.warning("Image download failed for %s, using original URLs: %s", lead.website_url, img_err)
+                logger.exception("Unexpected error downloading images for %s: %s", lead.website_url, img_err)
 
             # Include favicon_url in meta_info for persistence
             meta_info = data["meta_info"]

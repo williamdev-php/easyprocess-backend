@@ -1,5 +1,6 @@
 """Supabase Storage helpers for file upload, deletion, and health checks."""
 
+import logging
 import uuid
 
 import httpx
@@ -71,5 +72,6 @@ def check_storage_health() -> bool:
             timeout=5.0,
         )
         return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).error("Supabase storage health check failed: %s", e)
         return False

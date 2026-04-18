@@ -34,7 +34,7 @@ REGLER:
 5. Varje content-block (hero, about, services, etc.) är en separat nyckel. Sätt till null om sektionen inte är relevant.
 6. Inkludera INTE navigation, footer eller page-struktur — det genereras automatiskt.
 7. Fyll i ALLA relevanta sektioner — hero, about, features, stats, services, process, gallery, team, testimonials, faq, cta, contact.
-8. CTA-knappar ska ha href satt till "#kontakt".
+8. CTA-knappar ska ha href satt till "#contact".
 9. Generera MINST 6-8 services om företaget har tjänster.
 10. Generera 4-6 features/fördelar.
 11. Generera 3-5 stats/nyckeltal med realistiska värden.
@@ -158,7 +158,7 @@ VIKTIGT:
   "hero": {{
     "headline": "Kraftfull rubrik som fångar besökaren, max 8-10 ord",
     "subtitle": "2-3 meningar som förklarar vad företaget gör och varför besökaren ska stanna",
-    "cta": {{ "label": "Tydlig CTA-text", "href": "#kontakt" }},
+    "cta": {{ "label": "Tydlig CTA-text", "href": "#contact" }},
     "background_image": null
   }},
   "about": {{
@@ -243,7 +243,7 @@ VIKTIGT:
   "cta": {{
     "title": "Redo att komma igång?",
     "text": "1-2 meningar som motiverar besökaren",
-    "button": {{ "label": "CTA-text", "href": "#kontakt" }}
+    "button": {{ "label": "CTA-text", "href": "#contact" }}
   }},
   "contact": {{
     "title": "Kontakta oss",
@@ -290,7 +290,7 @@ def build_prompt(
     hero_text = ""
     hero_subtitle = ""
     meta_description = ""
-    about_text = "Ingen om-oss-text hittad."
+    about_text = "Ingen about-text hittad."
     headings_summary = "Inga rubriker hittade."
     paragraphs_summary = "Inga texter hittade."
     features_summary = "Inga features hittade."

@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,9 +153,20 @@ async def check_domain(
     return result
 
 
+_DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
+
+
 class DomainPurchaseRequest(BaseModel):
     domain: str
     site_id: str | None = None
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        d = v.strip().lower()
+        if not _DOMAIN_RE.match(d):
+            raise ValueError("Invalid domain format")
+        return d
 
 
 @router.post("/domain/purchase")
@@ -171,7 +183,7 @@ async def purchase_domain_endpoint(
     from app.sites.vercel import check_domain_availability
     from app.sites.models import DomainPurchase, DomainPurchaseStatus
 
-    domain = body.domain.strip().lower()
+    domain = body.domain  # Already validated & lowered by Pydantic
 
     # Check availability and get price
     avail = await check_domain_availability(domain)
@@ -321,11 +333,11 @@ async def _handle_domain_purchase_success(db: AsyncSession, payment_intent) -> N
     from app.sites.vercel import purchase_domain as vercel_purchase, add_domain as vercel_add
     from app.billing.models import Payment, PaymentStatus
 
-    # Find the pending purchase
+    # Find the pending purchase (locked to prevent race condition with concurrent webhooks)
     result = await db.execute(
         select(DomainPurchase).where(
             DomainPurchase.stripe_payment_intent_id == pi_id
-        )
+        ).with_for_update()
     )
     purchase = result.scalar_one_or_none()
     if not purchase:

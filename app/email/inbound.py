@@ -135,8 +135,17 @@ Rules:
             summary = str(result.get("summary", ""))[:500]
 
             return category, spam_score, summary
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            logger.error("Anthropic API auth failed — check ANTHROPIC_API_KEY")
+        else:
+            logger.warning("Anthropic API error %d: %s", e.response.status_code, e)
+        return EmailCategory.OTHER, 0.0, ""
+    except httpx.TimeoutException:
+        logger.warning("Anthropic API timeout during email classification")
+        return EmailCategory.OTHER, 0.0, ""
     except Exception as e:
-        logger.exception("AI classification failed: %s", e)
+        logger.exception("Unexpected error during AI classification: %s", e)
         return EmailCategory.OTHER, 0.0, ""
 
 
