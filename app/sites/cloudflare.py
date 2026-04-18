@@ -105,24 +105,22 @@ async def delete_subdomain_record(subdomain: str) -> bool:
 
 
 async def verify_custom_domain(domain: str) -> bool:
-    """Verify that a custom domain has a CNAME pointing to proxy.BASE_DOMAIN.
+    """Verify that a custom domain has a CNAME pointing to an accepted target.
 
-    Does a DNS lookup to check if the domain resolves correctly.
+    Accepted CNAME targets:
+    - proxy.BASE_DOMAIN (legacy)
+    - BASE_DOMAIN (legacy)
+    - cname.vercel-dns.com (Vercel)
     """
     expected_target = f"proxy.{settings.BASE_DOMAIN}"
+    accepted_targets = {
+        expected_target.lower(),
+        settings.BASE_DOMAIN.lower(),
+        "cname.vercel-dns.com",
+    }
 
     try:
-        answers = socket.getaddrinfo(domain, None)
-        # Also try CNAME resolution
-        try:
-            cname = socket.gethostbyname_ex(domain)
-            # Check if it resolves (basic check)
-            if cname:
-                logger.info("Domain %s resolves — performing CNAME check", domain)
-        except socket.herror:
-            pass
-
-        # For a more reliable CNAME check, query via Cloudflare DNS-over-HTTPS
+        # For a reliable CNAME check, query via Cloudflare DNS-over-HTTPS
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 "https://cloudflare-dns.com/dns-query",
@@ -132,16 +130,12 @@ async def verify_custom_domain(domain: str) -> bool:
             if resp.status_code == 200:
                 dns_data = resp.json()
                 for answer in dns_data.get("Answer", []):
-                    target = answer.get("data", "").rstrip(".")
-                    if target.lower() == expected_target.lower():
-                        logger.info("Domain %s CNAME verified → %s", domain, expected_target)
-                        return True
-                    # Also accept direct CNAME to BASE_DOMAIN
-                    if target.lower() == settings.BASE_DOMAIN.lower():
-                        logger.info("Domain %s CNAME verified → %s", domain, settings.BASE_DOMAIN)
+                    target = answer.get("data", "").rstrip(".").lower()
+                    if target in accepted_targets:
+                        logger.info("Domain %s CNAME verified → %s", domain, target)
                         return True
 
-        logger.warning("Domain %s CNAME does not point to %s", domain, expected_target)
+        logger.warning("Domain %s CNAME does not point to an accepted target", domain)
         return False
 
     except Exception:

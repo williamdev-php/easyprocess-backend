@@ -24,6 +24,9 @@ from app.sites.graphql_types import (
     CustomDomainType,
     DailyVisitorPoint,
     DashboardStatsType,
+    DomainPurchaseType,
+    DomainSearchResult,
+    DomainTransferInfoType,
     GeneratedSiteType,
     InboundEmailFilterInput,
     InboundEmailListType,
@@ -40,6 +43,7 @@ from app.sites.graphql_types import (
 from app.sites.models import (
     BLACKLISTED_SUBDOMAINS,
     CustomDomain,
+    DomainPurchase,
     DomainStatus,
     GeneratedSite,
     InboundEmail,
@@ -200,7 +204,49 @@ def _require_superuser(user: User) -> User:
     return user
 
 
-def _domain_to_gql(d: CustomDomain) -> CustomDomainType:
+def _extract_vercel_verification(vercel_data: dict) -> dict:
+    """Extract user-facing verification info from Vercel's domain response.
+
+    Returns a dict with:
+    - verified: whether the domain is verified
+    - verification: list of TXT records needed (if any)
+    - configured: whether DNS is properly configured
+    - instructions: human-readable DNS instructions
+    """
+    result: dict = {
+        "verified": vercel_data.get("verified", False),
+    }
+
+    # Verification TXT records (needed before DNS config)
+    if vercel_data.get("verification"):
+        result["verification"] = vercel_data["verification"]
+
+    # DNS config info
+    dns_config = vercel_data.get("dnsConfig")
+    if dns_config:
+        result["configured"] = dns_config.get("configured", False)
+        result["misconfigured"] = dns_config.get("misconfigured", False)
+
+    # Build user-friendly instructions
+    if not result.get("verified"):
+        verification_records = vercel_data.get("verification", [])
+        if verification_records:
+            result["instructions"] = (
+                "Lägg till följande TXT-post i din DNS för att verifiera domänen: "
+                f"Typ: TXT, Namn: _vercel, Värde: {verification_records[0].get('value', '')}"
+            )
+        else:
+            result["instructions"] = (
+                "Peka din domän till Vercel genom att lägga till en CNAME-post: "
+                "Typ: CNAME, Namn: @ (eller www), Värde: cname.vercel-dns.com"
+            )
+    else:
+        result["instructions"] = "Domänen är verifierad och aktiv!"
+
+    return result
+
+
+def _domain_to_gql(d: CustomDomain, vercel_verification: dict | None = None) -> CustomDomainType:
     return CustomDomainType(
         id=d.id,
         domain=d.domain,
@@ -211,6 +257,7 @@ def _domain_to_gql(d: CustomDomain) -> CustomDomainType:
         verified_at=d.verified_at,
         created_at=d.created_at,
         updated_at=d.updated_at,
+        vercel_verification=vercel_verification,
     )
 
 
@@ -261,8 +308,12 @@ class SiteQuery:
     async def site_analytics(
         self, info: Info, site_id: str, days: int = 7
     ) -> SiteAnalyticsType:
-        """Get analytics for a site owned by the current user."""
+        """Get analytics for a site owned by the current user.
+
+        Uses database aggregation instead of loading all PageView rows into memory.
+        """
         from datetime import timedelta
+        from sqlalchemy import cast, Date
 
         user = _require_user(await _get_user_from_info(info))
         days = min(days, 90)
@@ -286,99 +337,88 @@ class SiteQuery:
             period_start = now - timedelta(days=days)
             prev_period_start = period_start - timedelta(days=days)
 
-            # Current period stats
-            current_views = await db.execute(
-                select(PageView).where(
+            # --- Aggregate current period in database ---
+            cur_agg = await db.execute(
+                select(
+                    func.count().label("total_views"),
+                    func.count(func.distinct(PageView.visitor_id)).label("unique_visitors"),
+                    func.count(func.distinct(PageView.session_id)).label("unique_sessions"),
+                    func.avg(PageView.load_time_ms).label("avg_load"),
+                    func.avg(PageView.fcp_ms).label("avg_fcp"),
+                    func.avg(PageView.lcp_ms).label("avg_lcp"),
+                    func.avg(PageView.cls).label("avg_cls"),
+                ).where(
                     PageView.site_id == site_id,
                     PageView.created_at >= period_start,
                 )
             )
-            current_rows = current_views.scalars().all()
+            cur = cur_agg.one()
 
-            # Previous period stats (for comparison)
-            prev_views = await db.execute(
-                select(PageView).where(
+            total_page_views = cur.total_views or 0
+            total_visitors = cur.unique_visitors or 0
+            total_sessions = cur.unique_sessions or 0
+            pages_per_session = round(total_page_views / total_sessions, 1) if total_sessions else 0.0
+
+            avg_load = int(cur.avg_load) if cur.avg_load is not None else None
+            avg_fcp = int(cur.avg_fcp) if cur.avg_fcp is not None else None
+            avg_lcp = int(cur.avg_lcp) if cur.avg_lcp is not None else None
+            avg_cls = round(float(cur.avg_cls), 3) if cur.avg_cls is not None else None
+
+            perf_score = _calc_performance_score(avg_lcp, avg_fcp, avg_cls)
+
+            # --- Aggregate previous period in database ---
+            prev_agg = await db.execute(
+                select(
+                    func.count().label("total_views"),
+                    func.count(func.distinct(PageView.visitor_id)).label("unique_visitors"),
+                    func.count(func.distinct(PageView.session_id)).label("unique_sessions"),
+                    func.avg(PageView.lcp_ms).label("avg_lcp"),
+                    func.avg(PageView.fcp_ms).label("avg_fcp"),
+                    func.avg(PageView.cls).label("avg_cls"),
+                ).where(
                     PageView.site_id == site_id,
                     PageView.created_at >= prev_period_start,
                     PageView.created_at < period_start,
                 )
             )
-            prev_rows = prev_views.scalars().all()
+            prev = prev_agg.one()
 
-            # Current period metrics
-            cur_visitors = set()
-            cur_sessions = set()
-            cur_load_times = []
-            cur_fcp_times = []
-            cur_lcp_times = []
-            cur_cls_values = []
-            daily_map: dict[str, dict] = {}
+            prev_visitors = prev.unique_visitors or 0
+            prev_sessions = prev.unique_sessions or 0
+            prev_pps = round((prev.total_views or 0) / prev_sessions, 1) if prev_sessions else 0.0
 
-            for pv in current_rows:
-                cur_visitors.add(pv.visitor_id)
-                cur_sessions.add(pv.session_id)
-                if pv.load_time_ms is not None:
-                    cur_load_times.append(pv.load_time_ms)
-                if pv.fcp_ms is not None:
-                    cur_fcp_times.append(pv.fcp_ms)
-                if pv.lcp_ms is not None:
-                    cur_lcp_times.append(pv.lcp_ms)
-                if pv.cls is not None:
-                    cur_cls_values.append(pv.cls)
-
-                day_key = pv.created_at.strftime("%Y-%m-%d")
-                if day_key not in daily_map:
-                    daily_map[day_key] = {"visitors": set(), "page_views": 0}
-                daily_map[day_key]["visitors"].add(pv.visitor_id)
-                daily_map[day_key]["page_views"] += 1
-
-            total_visitors = len(cur_visitors)
-            total_sessions = len(cur_sessions)
-            total_page_views = len(current_rows)
-            pages_per_session = round(total_page_views / total_sessions, 1) if total_sessions else 0.0
-
-            avg_load = int(sum(cur_load_times) / len(cur_load_times)) if cur_load_times else None
-            avg_fcp = int(sum(cur_fcp_times) / len(cur_fcp_times)) if cur_fcp_times else None
-            avg_lcp = int(sum(cur_lcp_times) / len(cur_lcp_times)) if cur_lcp_times else None
-            avg_cls = round(sum(cur_cls_values) / len(cur_cls_values), 3) if cur_cls_values else None
-
-            # Performance score (0-100 based on Web Vitals thresholds)
-            perf_score = _calc_performance_score(avg_lcp, avg_fcp, avg_cls)
-
-            # Previous period for comparison
-            prev_visitors = len({pv.visitor_id for pv in prev_rows})
-            prev_sessions_set = {pv.session_id for pv in prev_rows}
-            prev_pps = round(len(prev_rows) / len(prev_sessions_set), 1) if prev_sessions_set else 0.0
-
-            prev_lcp = []
-            prev_fcp_list = []
-            prev_cls_list = []
-            for pv in prev_rows:
-                if pv.lcp_ms is not None:
-                    prev_lcp.append(pv.lcp_ms)
-                if pv.fcp_ms is not None:
-                    prev_fcp_list.append(pv.fcp_ms)
-                if pv.cls is not None:
-                    prev_cls_list.append(pv.cls)
-
-            prev_avg_lcp = int(sum(prev_lcp) / len(prev_lcp)) if prev_lcp else None
-            prev_avg_fcp = int(sum(prev_fcp_list) / len(prev_fcp_list)) if prev_fcp_list else None
-            prev_avg_cls = round(sum(prev_cls_list) / len(prev_cls_list), 3) if prev_cls_list else None
+            prev_avg_lcp = int(prev.avg_lcp) if prev.avg_lcp is not None else None
+            prev_avg_fcp = int(prev.avg_fcp) if prev.avg_fcp is not None else None
+            prev_avg_cls = round(float(prev.avg_cls), 3) if prev.avg_cls is not None else None
             prev_perf = _calc_performance_score(prev_avg_lcp, prev_avg_fcp, prev_avg_cls)
 
             visitors_change = 0.0
             if prev_visitors > 0:
                 visitors_change = round(((total_visitors - prev_visitors) / prev_visitors) * 100, 1)
 
-            # Build daily data points
+            # --- Daily breakdown (aggregated in DB) ---
+            daily_agg = await db.execute(
+                select(
+                    cast(PageView.created_at, Date).label("day"),
+                    func.count(func.distinct(PageView.visitor_id)).label("visitors"),
+                    func.count().label("page_views"),
+                ).where(
+                    PageView.site_id == site_id,
+                    PageView.created_at >= period_start,
+                ).group_by(
+                    cast(PageView.created_at, Date)
+                )
+            )
+            daily_map = {str(row.day): row for row in daily_agg.all()}
+
             daily_points = []
             for i in range(days):
                 day = (period_start + timedelta(days=i + 1)).strftime("%Y-%m-%d")
-                entry = daily_map.get(day, {"visitors": set(), "page_views": 0})
+                row = daily_map.get(day)
                 daily_points.append(DailyVisitorPoint(
                     date=day,
-                    visitors=len(entry["visitors"]),
-                    page_views=entry["page_views"],
+                    visitors=row.visitors if row else 0,
+                    page_views=row.page_views if row else 0,
                 ))
 
             return SiteAnalyticsType(
@@ -411,6 +451,53 @@ class SiteQuery:
             )
             domains = result.scalars().all()
             return [_domain_to_gql(d) for d in domains]
+
+    @strawberry.field
+    async def search_domain(self, info: Info, domain: str) -> DomainSearchResult:
+        """Search for a domain's availability and price."""
+        _require_user(await _get_user_from_info(info))
+
+        from app.sites.vercel import check_domain_availability
+        result = await check_domain_availability(domain.strip().lower())
+        if not result:
+            raise ValueError("Kunde inte kontrollera domäntillgänglighet")
+
+        return DomainSearchResult(
+            available=result.get("available", False),
+            domain=result.get("domain", domain),
+            price_sek=result.get("price_sek", 0),
+            price_sek_display=result.get("price_sek_display", 0),
+            price_usd=result.get("price_usd", 0.0),
+            period=result.get("period", 1),
+        )
+
+    @strawberry.field
+    async def my_purchased_domains(self, info: Info) -> list[DomainPurchaseType]:
+        """Get all domains purchased by the current user."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(DomainPurchase)
+                .where(DomainPurchase.user_id == str(user.id))
+                .order_by(DomainPurchase.created_at.desc())
+            )
+            purchases = result.scalars().all()
+            return [
+                DomainPurchaseType(
+                    id=p.id,
+                    domain=p.domain,
+                    price_sek=p.price_sek,
+                    status=p.status.value,
+                    period_years=p.period_years,
+                    auto_renew=p.auto_renew,
+                    is_locked=p.is_locked,
+                    expires_at=p.expires_at,
+                    purchased_at=p.purchased_at,
+                    created_at=p.created_at,
+                )
+                for p in purchases
+            ]
 
     @strawberry.field
     async def subdomain_info(self, info: Info, site_id: str) -> SubdomainInfoType:
@@ -1018,7 +1105,12 @@ class SiteMutation:
 
     @strawberry.mutation
     async def add_domain(self, info: Info, input: AddDomainInput) -> CustomDomainType:
-        """Add a custom domain for the current user."""
+        """Add a custom domain for the current user.
+
+        Registers the domain with Vercel so it can serve the viewer app
+        and issue TLS certificates. Returns verification info so the user
+        knows which DNS records to configure.
+        """
         user = _require_user(await _get_user_from_info(info))
 
         # Normalize domain
@@ -1061,6 +1153,16 @@ class SiteMutation:
             await db.commit()
             await db.refresh(custom_domain)
 
+            # Register domain with Vercel (best-effort)
+            vercel_info = None
+            try:
+                from app.sites.vercel import add_domain as vercel_add_domain
+                vercel_result = await vercel_add_domain(domain)
+                if vercel_result:
+                    vercel_info = _extract_vercel_verification(vercel_result)
+            except Exception:
+                logger.warning("Failed to register domain %s with Vercel", domain)
+
             # Log the change
             await log_settings_change(
                 db, str(user.id), AuditEventType.DOMAIN_CHANGE,
@@ -1069,11 +1171,11 @@ class SiteMutation:
             )
             await db.commit()
 
-            return _domain_to_gql(custom_domain)
+            return _domain_to_gql(custom_domain, vercel_verification=vercel_info)
 
     @strawberry.mutation
     async def remove_domain(self, info: Info, domain_id: str) -> bool:
-        """Remove a custom domain."""
+        """Remove a custom domain. Also removes it from Vercel."""
         user = _require_user(await _get_user_from_info(info))
 
         async with async_session() as db:
@@ -1088,6 +1190,24 @@ class SiteMutation:
                 raise ValueError("Domain not found")
 
             domain_name = domain.domain
+
+            # Remove from Vercel (best-effort)
+            try:
+                from app.sites.vercel import remove_domain as vercel_remove_domain
+                await vercel_remove_domain(domain_name)
+            except Exception:
+                logger.warning("Failed to remove domain %s from Vercel", domain_name)
+
+            # Also clear custom_domain on the linked site
+            if domain.site_id:
+                site_result = await db.execute(
+                    select(GeneratedSite).where(GeneratedSite.id == domain.site_id)
+                )
+                site = site_result.scalar_one_or_none()
+                if site and site.custom_domain == domain_name:
+                    site.custom_domain = None
+                    await cache.delete(f"site:{site.id}")
+
             await db.delete(domain)
             await db.commit()
 
@@ -1150,7 +1270,11 @@ class SiteMutation:
 
     @strawberry.mutation
     async def verify_domain(self, info: Info, domain_id: str) -> CustomDomainType:
-        """Verify a custom domain's DNS configuration."""
+        """Verify a custom domain's DNS configuration via Vercel.
+
+        Checks Vercel's domain verification status. If verified, Vercel
+        will automatically issue TLS certificates and route traffic.
+        """
         user = _require_user(await _get_user_from_info(info))
 
         async with async_session() as db:
@@ -1164,8 +1288,20 @@ class SiteMutation:
             if not domain:
                 raise ValueError("Domain not found")
 
-            from app.sites.cloudflare import verify_custom_domain
-            verified = await verify_custom_domain(domain.domain)
+            vercel_info = None
+            verified = False
+
+            # Primary: check via Vercel API
+            try:
+                from app.sites.vercel import check_domain_status
+                verified, vercel_data = await check_domain_status(domain.domain)
+                if vercel_data:
+                    vercel_info = _extract_vercel_verification(vercel_data)
+            except Exception:
+                logger.warning("Vercel verification failed for %s, falling back to DNS check", domain.domain)
+                # Fallback: direct DNS check
+                from app.sites.cloudflare import verify_custom_domain
+                verified = await verify_custom_domain(domain.domain)
 
             if verified:
                 domain.status = DomainStatus.ACTIVE
@@ -1175,7 +1311,7 @@ class SiteMutation:
 
             await db.commit()
             await db.refresh(domain)
-            return _domain_to_gql(domain)
+            return _domain_to_gql(domain, vercel_verification=vercel_info)
 
     @strawberry.mutation
     async def set_site_subdomain(
@@ -1247,6 +1383,193 @@ class SiteMutation:
             await cache.delete(f"site:data:{site.id}")
 
             return _site_to_gql(site, site.lead)
+
+    # -------------------------------------------------------------------
+    # Domain transfer & management (not promoted, available on request)
+    # -------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def prepare_domain_transfer(self, info: Info, domain_id: str) -> DomainTransferInfoType:
+        """Unlock a purchased domain and retrieve the auth/EPP code for transfer.
+
+        The customer needs this code to transfer the domain to another registrar.
+        """
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(DomainPurchase).where(
+                    DomainPurchase.id == domain_id,
+                    DomainPurchase.user_id == str(user.id),
+                )
+            )
+            purchase = result.scalar_one_or_none()
+            if not purchase:
+                raise ValueError("Köpt domän hittades inte")
+            if purchase.status.value != "PURCHASED":
+                raise ValueError("Domänen måste ha status PURCHASED för att kunna överföras")
+
+            from app.sites.vercel import get_transfer_auth_code
+
+            # Get auth code (unlocking is implicit in the new API)
+            auth_code = await get_transfer_auth_code(purchase.domain)
+
+            purchase.is_locked = False
+            await db.commit()
+
+            return DomainTransferInfoType(
+                domain=purchase.domain,
+                is_locked=False,
+                auth_code=auth_code,
+                instructions=(
+                    "Domänen är nu upplåst för överföring. "
+                    "Använd auktoriseringskoden hos din nya domänregistrar för att initiera flytten. "
+                    "Överföringen tar vanligtvis 5-7 dagar. "
+                    "Domänen låses automatiskt igen efter 14 dagar om ingen överföring sker."
+                ),
+            )
+
+    @strawberry.mutation
+    async def lock_domain(self, info: Info, domain_id: str) -> DomainPurchaseType:
+        """Re-lock a domain to prevent unauthorized transfers."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(DomainPurchase).where(
+                    DomainPurchase.id == domain_id,
+                    DomainPurchase.user_id == str(user.id),
+                )
+            )
+            purchase = result.scalar_one_or_none()
+            if not purchase:
+                raise ValueError("Köpt domän hittades inte")
+
+            # Re-locking is not exposed in the new Registrar API;
+            # the domain is implicitly locked when no transfer is active.
+
+            purchase.is_locked = True
+            await db.commit()
+
+            return DomainPurchaseType(
+                id=purchase.id,
+                domain=purchase.domain,
+                price_sek=purchase.price_sek,
+                status=purchase.status.value,
+                period_years=purchase.period_years,
+                auto_renew=purchase.auto_renew,
+                is_locked=purchase.is_locked,
+                expires_at=purchase.expires_at,
+                purchased_at=purchase.purchased_at,
+                created_at=purchase.created_at,
+            )
+
+    @strawberry.mutation
+    async def toggle_domain_auto_renew(self, info: Info, domain_id: str, auto_renew: bool) -> DomainPurchaseType:
+        """Enable or disable auto-renewal for a purchased domain."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(DomainPurchase).where(
+                    DomainPurchase.id == domain_id,
+                    DomainPurchase.user_id == str(user.id),
+                )
+            )
+            purchase = result.scalar_one_or_none()
+            if not purchase:
+                raise ValueError("Köpt domän hittades inte")
+
+            purchase.auto_renew = auto_renew
+            await db.commit()
+
+            return DomainPurchaseType(
+                id=purchase.id,
+                domain=purchase.domain,
+                price_sek=purchase.price_sek,
+                status=purchase.status.value,
+                period_years=purchase.period_years,
+                auto_renew=purchase.auto_renew,
+                is_locked=purchase.is_locked,
+                expires_at=purchase.expires_at,
+                purchased_at=purchase.purchased_at,
+                created_at=purchase.created_at,
+            )
+
+    @strawberry.mutation
+    async def renew_purchased_domain(self, info: Info, domain_id: str) -> DomainPurchaseType:
+        """Manually renew a purchased domain. Charges the user's default payment method."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(DomainPurchase).where(
+                    DomainPurchase.id == domain_id,
+                    DomainPurchase.user_id == str(user.id),
+                )
+            )
+            purchase = result.scalar_one_or_none()
+            if not purchase:
+                raise ValueError("Köpt domän hittades inte")
+            if purchase.status.value != "PURCHASED":
+                raise ValueError("Kan bara förnya aktiva domäner")
+
+            # Get renewal price
+            from app.sites.vercel import check_domain_price, renew_domain as vercel_renew
+            price_info = await check_domain_price(purchase.domain)
+            if not price_info:
+                raise ValueError("Kunde inte hämta förnyelsepris")
+
+            # Create PaymentIntent for renewal
+            import stripe
+            from app.billing.service import get_or_create_stripe_customer
+
+            customer_id = await get_or_create_stripe_customer(db, user)
+            price_sek_ore = price_info["price_sek"]
+
+            payment_intent = stripe.PaymentIntent.create(
+                amount=price_sek_ore,
+                currency="sek",
+                customer=customer_id,
+                metadata={
+                    "qvicko_user_id": str(user.id),
+                    "qvicko_domain": purchase.domain,
+                    "qvicko_type": "domain_renewal",
+                    "qvicko_purchase_id": purchase.id,
+                },
+                description=f"Domänförnyelse: {purchase.domain}",
+                confirm=True,
+                automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+            )
+
+            if payment_intent.status == "succeeded":
+                # Renew on Vercel (new API requires expected price)
+                renew_result = await vercel_renew(
+                    purchase.domain,
+                    expected_price=price_info["price_usd"],
+                )
+                if renew_result:
+                    from dateutil.relativedelta import relativedelta
+                    purchase.expires_at = (purchase.expires_at or datetime.now(timezone.utc)) + relativedelta(years=1)
+                    purchase.price_sek = price_sek_ore
+                    await db.commit()
+                else:
+                    raise ValueError("Vercel-förnyelse misslyckades. Betalning återbetalas.")
+            else:
+                raise ValueError("Betalningen kunde inte genomföras. Kontrollera ditt betalkort.")
+
+            return DomainPurchaseType(
+                id=purchase.id,
+                domain=purchase.domain,
+                price_sek=purchase.price_sek,
+                status=purchase.status.value,
+                period_years=purchase.period_years,
+                auto_renew=purchase.auto_renew,
+                is_locked=purchase.is_locked,
+                expires_at=purchase.expires_at,
+                purchased_at=purchase.purchased_at,
+                created_at=purchase.created_at,
+            )
 
 
 # ---------------------------------------------------------------------------

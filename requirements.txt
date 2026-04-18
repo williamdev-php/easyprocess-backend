@@ -19,3 +19,5 @@ resend
 slowapi
 playwright
 anthropic
+stripe
+python-dateutil

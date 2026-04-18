@@ -102,14 +102,20 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
 
             # --- Step 2b: Download images to storage ---
             try:
-                data["images"], data["logo_url"] = await download_and_store_images(
+                data["images"], data["logo_url"], data["favicon_url"] = await download_and_store_images(
                     images=data["images"],
                     logo_url=data["logo_url"],
                     lead_id=str(lead.id),
+                    favicon_url=data.get("favicon_url"),
                 )
                 logger.info("Downloaded %d images for %s", len(data["images"]), lead.website_url)
             except Exception as img_err:
                 logger.warning("Image download failed for %s, using original URLs: %s", lead.website_url, img_err)
+
+            # Include favicon_url in meta_info for persistence
+            meta_info = data["meta_info"]
+            if data.get("favicon_url"):
+                meta_info["favicon_url"] = data["favicon_url"]
 
             # Save scraped data (replace if exists)
             if lead.scraped_data:
@@ -119,7 +125,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 scraped.texts = data["texts"]
                 scraped.images = data["images"]
                 scraped.contact_info = data["contact_info"]
-                scraped.meta_info = data["meta_info"]
+                scraped.meta_info = meta_info
                 scraped.raw_html_hash = data["html_hash"]
             else:
                 scraped = ScrapedData(
@@ -129,7 +135,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     texts=data["texts"],
                     images=data["images"],
                     contact_info=data["contact_info"],
-                    meta_info=data["meta_info"],
+                    meta_info=meta_info,
                     raw_html_hash=data["html_hash"],
                 )
                 db.add(scraped)
@@ -195,6 +201,10 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 visual_analysis=data.get("visual_analysis"),
                 screenshot_bytes=screenshot_data,
             )
+
+            # Inject favicon_url into generated site meta (AI may not include it)
+            if data.get("favicon_url") and not gen_result.site_schema.meta.favicon_url:
+                gen_result.site_schema.meta.favicon_url = data["favicon_url"]
 
             # Save generated site (replace if exists)
             site_data = gen_result.site_schema.model_dump(mode="json")

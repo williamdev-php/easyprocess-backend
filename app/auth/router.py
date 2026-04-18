@@ -105,14 +105,19 @@ async def register(
     session, raw_token = await create_session(db, user.id, ip_address=ip, user_agent=ua)
     await log_audit_event(db, AuditEventType.REGISTER, user.id, ip, ua)
 
-    # Send verification email
+    # Send verification email (non-blocking — user is created even if email fails,
+    # but we log a warning so ops can investigate delivery issues).
+    email_sent = False
     try:
         verification_token = await create_email_verification_token(db, user)
         verify_url = f"{settings.FRONTEND_URL}/verify-email?token={verification_token}"
         subject, html, text = build_verification_email(verify_url, user.full_name or "användare")
         await _send_via_resend(user.email, subject, html, text)
+        email_sent = True
     except Exception:
-        logger.exception("Failed to send verification email on registration")
+        logger.exception("Failed to send verification email to %s on registration", user.email)
+    if not email_sent:
+        logger.warning("User %s registered but verification email was NOT delivered", user.id)
 
     access_token = create_access_token(user.id)
     _set_refresh_cookie(response, raw_token)
@@ -441,9 +446,13 @@ async def reset_password(
     if not token:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
+    # Mark token as used BEFORE changing password to prevent race conditions
+    # (concurrent requests with same token).
+    token.used_at = datetime.now(timezone.utc)
+    await db.flush()
+
     user = token.user
     await change_password(db, user, body.new_password)
-    token.used_at = datetime.now(timezone.utc)
 
     # Revoke all sessions for security
     await revoke_all_user_sessions(db, user.id)

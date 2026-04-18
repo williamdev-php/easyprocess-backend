@@ -133,16 +133,56 @@ async def _download_one(url: str, lead_id: str) -> tuple[str | None, tuple[int, 
         return None, None
 
 
+async def _download_favicon(url: str, lead_id: str) -> str | None:
+    """Download a favicon and upload to Supabase Storage. No dimension check."""
+    if not _is_safe_url(url):
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            headers=HEADERS, follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT, max_redirects=3
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+
+            content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            allowed = _ALLOWED_CONTENT_TYPES | {"image/x-icon", "image/vnd.microsoft.icon"}
+            if content_type not in allowed:
+                return None
+
+            if len(resp.content) > 1 * 1024 * 1024:  # 1 MB max for favicon
+                return None
+
+            path = urlparse(url).path
+            ext = ""
+            if "." in path.split("/")[-1]:
+                ext = path.rsplit(".", 1)[-1].lower().split("?")[0]
+            if not ext or len(ext) > 5:
+                ext = "ico" if "icon" in content_type else (mimetypes.guess_extension(content_type, strict=False) or ".png").lstrip(".")
+
+            stored_url = upload_file(
+                file_data=resp.content,
+                file_name=f"favicon.{ext}",
+                content_type=content_type,
+                prefix=f"scraped-images/{lead_id}",
+            )
+            return stored_url
+    except Exception as e:
+        logger.debug("Failed to download favicon %s: %s", url, e)
+        return None
+
+
 async def download_and_store_images(
     images: list[dict],
     logo_url: str | None,
     lead_id: str,
-) -> tuple[list[dict], str | None]:
+    favicon_url: str | None = None,
+) -> tuple[list[dict], str | None, str | None]:
     """
-    Download extracted images and logo, upload to Supabase Storage.
+    Download extracted images, logo, and favicon, upload to Supabase Storage.
 
-    Returns (updated_images, updated_logo_url) with storage URLs where successful.
-    Original URLs are kept as fallback when download fails.
+    Returns (updated_images, updated_logo_url, updated_favicon_url) with storage URLs
+    where successful. Original URLs are kept as fallback when download fails.
     Images that are too small are filtered out.
     """
     # Download logo first
@@ -151,6 +191,13 @@ async def download_and_store_images(
         stored_logo, _ = await _download_one(logo_url, lead_id)
         if stored_logo:
             new_logo_url = stored_logo
+
+    # Download favicon
+    new_favicon_url = favicon_url
+    if favicon_url:
+        stored_favicon = await _download_favicon(favicon_url, lead_id)
+        if stored_favicon:
+            new_favicon_url = stored_favicon
 
     # Download images (prioritise hero > gallery > team > general, limit to _MAX_IMAGES)
     priority = {"hero": 0, "gallery": 1, "team": 2, "general": 3}
@@ -186,4 +233,4 @@ async def download_and_store_images(
         "stored" if new_logo_url != logo_url else "original",
     )
 
-    return new_images, new_logo_url
+    return new_images, new_logo_url, new_favicon_url

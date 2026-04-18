@@ -23,7 +23,7 @@ from app.cache import cache
 from app.database import get_db
 from app.email.service import process_resend_webhook
 from app.sites.migration import normalize_site_data
-from app.sites.models import CustomDomain, DomainStatus, GeneratedSite, Lead, PageView, SiteStatus
+from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Lead, PageView, SiteStatus
 from app.sites.site_schema import SiteSchema
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
@@ -391,6 +391,50 @@ async def track_view(
 
     await db.commit()
     await cache.delete(f"site:data:{site_id}")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Contact form
+# ---------------------------------------------------------------------------
+
+class ContactPayload(BaseModel):
+    name: str
+    email: str
+    message: str
+
+
+@router.post("/{site_id}/contact")
+async def submit_contact(
+    site_id: str,
+    payload: ContactPayload,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Receive a contact form submission from a site visitor."""
+    # Validate site exists
+    result = await db.execute(
+        select(GeneratedSite.id).where(GeneratedSite.id == site_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Site not found")
+
+    # Basic validation
+    name = payload.name.strip()[:255]
+    email = payload.email.strip()[:255]
+    message = payload.message.strip()[:5000]
+
+    if not name or not email or not message:
+        raise HTTPException(status_code=400, detail="All fields are required")
+
+    contact_msg = ContactMessage(
+        site_id=site_id,
+        name=name,
+        email=email,
+        message=message,
+    )
+    db.add(contact_msg)
+    await db.commit()
+
     return {"ok": True}
 
 

@@ -44,6 +44,7 @@ class MetaInfo(BaseModel):
     description: str = ""
     keywords: list[str] = []
     og_image: str | None = None
+    favicon_url: str | None = None
     language: str = "sv"
 
 

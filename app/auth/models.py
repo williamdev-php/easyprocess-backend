@@ -82,6 +82,15 @@ class User(Base):
     billing_zip: Mapped[str | None] = mapped_column(String(20), nullable=True)
     billing_country: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Stripe
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    subscription_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Personal info
+    country: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # Roles & permissions
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), default=UserRole.USER, nullable=False

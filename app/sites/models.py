@@ -199,6 +199,7 @@ class GeneratedSite(Base):
     ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     generation_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -390,5 +391,73 @@ class CustomDomain(Base):
         Index("idx_custom_domains_user_id", "user_id"),
         Index("idx_custom_domains_domain", "domain"),
         Index("idx_custom_domains_site_id", "site_id"),
+        {"schema": SCHEMA},
+    )
+
+
+class DomainPurchaseStatus(str, enum.Enum):
+    PENDING_PAYMENT = "PENDING_PAYMENT"
+    PURCHASED = "PURCHASED"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+
+
+class DomainPurchase(Base):
+    """Domain purchased via Vercel Domains on behalf of a user."""
+    __tablename__ = "domain_purchases"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"), nullable=False
+    )
+    domain: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    price_sek: Mapped[int] = mapped_column(Integer, nullable=False)  # öre
+    price_usd: Mapped[float] = mapped_column(Float, nullable=False)  # Vercel cost
+    period_years: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[DomainPurchaseStatus] = mapped_column(
+        Enum(DomainPurchaseStatus), default=DomainPurchaseStatus.PENDING_PAYMENT, nullable=False
+    )
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vercel_domain_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purchased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_domain_purchases_user_id", "user_id"),
+        Index("idx_domain_purchases_domain", "domain"),
+        {"schema": SCHEMA},
+    )
+
+
+class ContactMessage(Base):
+    """Contact form message submitted by a site visitor."""
+    __tablename__ = "contact_messages"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    site_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.generated_sites.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    # Relationships
+    site: Mapped["GeneratedSite"] = relationship("GeneratedSite", foreign_keys=[site_id])
+
+    __table_args__ = (
+        Index("idx_contact_messages_site_id", "site_id"),
         {"schema": SCHEMA},
     )

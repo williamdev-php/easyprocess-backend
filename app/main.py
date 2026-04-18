@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
@@ -17,7 +18,8 @@ from app.database import engine, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
 from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog  # noqa: F401
-from app.sites.models import Lead, ScrapedData, GeneratedSite, OutreachEmail, InboundEmail, PageView, CustomDomain  # noqa: F401
+from app.sites.models import Lead, ScrapedData, GeneratedSite, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase  # noqa: F401
+from app.billing.models import Subscription, Payment, BillingDetails  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             logger.warning("Supabase Storage bucket '%s' is NOT accessible — image storage will fail", settings.SUPABASE_STORAGE_BUCKET)
 
+    # Start daily expiration check background task with exponential backoff
+    async def _expiration_loop():
+        from app.billing.expiration import check_expired_sites
+        consecutive_failures = 0
+        base_interval = 86400  # 24 hours
+        while True:
+            try:
+                await check_expired_sites()
+                logger.info("Site expiration check completed")
+                consecutive_failures = 0
+                await asyncio.sleep(base_interval)
+            except Exception:
+                consecutive_failures += 1
+                # Backoff: 5min, 15min, 45min, capped at 2 hours
+                backoff = min(300 * (3 ** (consecutive_failures - 1)), 7200)
+                logger.exception(
+                    "Site expiration check failed (attempt %d), retrying in %ds",
+                    consecutive_failures, backoff,
+                )
+                await asyncio.sleep(backoff)
+
+    expiration_task = asyncio.create_task(_expiration_loop())
+
     yield
+
+    expiration_task.cancel()
     await cache.close()
     await engine.dispose()
 
@@ -50,10 +77,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — allow configured origins + any viewer subdomain / custom domain.
+# The viewer sends tracking beacons from *.qvickosite.com and custom domains,
+# so we need a regex pattern in addition to the explicit allow-list.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
+    allow_origin_regex=r"https?://(.+\.)?" + settings.BASE_DOMAIN.replace(".", r"\.") + r"(:\d+)?",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
@@ -68,10 +98,14 @@ app.add_middleware(SlowAPIMiddleware)
 from app.auth.router import router as auth_router  # noqa: E402
 from app.sites.router import router as sites_router  # noqa: E402
 from app.sites.router import webhook_router  # noqa: E402
+from app.billing.router import router as billing_router  # noqa: E402
+from app.billing.router import webhook_router as stripe_webhook_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
 app.include_router(webhook_router)
+app.include_router(billing_router)
+app.include_router(stripe_webhook_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

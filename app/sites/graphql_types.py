@@ -264,6 +264,8 @@ class CustomDomainType:
     verified_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Vercel verification info — tells the user what DNS records to set
+    vercel_verification: JSON | None = None
 
 
 @strawberry.type
@@ -284,3 +286,42 @@ class AddDomainInput:
 class AssignDomainInput:
     domain_id: str
     site_id: str
+
+
+# ---------------------------------------------------------------------------
+# Domain purchase types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class DomainSearchResult:
+    """Result of a domain availability check."""
+    available: bool
+    domain: str
+    price_sek: int = 0  # öre
+    price_sek_display: int = 0  # whole SEK for display
+    price_usd: float = 0.0
+    period: int = 1  # years
+
+
+@strawberry.type
+class DomainPurchaseType:
+    """A domain purchased through the platform."""
+    id: str
+    domain: str
+    price_sek: int  # öre
+    status: str
+    period_years: int
+    auto_renew: bool = True
+    is_locked: bool = True
+    expires_at: datetime | None = None
+    purchased_at: datetime | None = None
+    created_at: datetime
+
+
+@strawberry.type
+class DomainTransferInfoType:
+    """Transfer info for moving a domain to another registrar."""
+    domain: str
+    is_locked: bool
+    auth_code: str | None = None
+    instructions: str = ""

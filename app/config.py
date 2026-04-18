@@ -60,6 +60,20 @@ class Settings(BaseSettings):
     CLOUDFLARE_ZONE_ID: str = ""
     BASE_DOMAIN: str = "qvicko.se"  # e.g. slug.qvicko.se
 
+    # Vercel (for custom domain management on viewer project)
+    VERCEL_API_TOKEN: str = ""
+    VERCEL_PROJECT_ID: str = ""  # The viewer project ID or name
+    VERCEL_TEAM_ID: str = ""  # Optional, required for team-scoped projects
+
+    # Domain sales markup (percentage added on top of Vercel's domain price)
+    DOMAIN_MARKUP_PERCENT: int = 30  # 30% markup by default
+
+    # Stripe
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_ID: str = ""  # The single 199 SEK/month price
+
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
 
@@ -78,5 +92,28 @@ class Settings(BaseSettings):
     def supabase_storage_url(self) -> str:
         return f"{self.SUPABASE_URL}/storage/v1"
 
+    def validate_production_secrets(self) -> None:
+        """Raise on startup if production is using insecure defaults."""
+        if self.ENVIRONMENT != "production":
+            return
+        if self.SECRET_KEY == "qvicko-dev-secret-key-change-in-production":
+            raise RuntimeError(
+                "FATAL: Production is using the default SECRET_KEY. "
+                "Set a strong, unique SECRET_KEY environment variable."
+            )
+        required = {
+            "DATABASE_URL": self.DATABASE_URL,
+            "RESEND_API_KEY": self.RESEND_API_KEY,
+            "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
+            "STRIPE_SECRET_KEY": self.STRIPE_SECRET_KEY,
+            "STRIPE_WEBHOOK_SECRET": self.STRIPE_WEBHOOK_SECRET,
+        }
+        missing = [k for k, v in required.items() if not v]
+        if missing:
+            raise RuntimeError(
+                f"FATAL: Missing required env vars for production: {', '.join(missing)}"
+            )
+
 
 settings = Settings()
+settings.validate_production_secrets()

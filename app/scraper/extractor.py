@@ -69,26 +69,49 @@ _EMAIL_IGNORE = {"noreply", "no-reply", "info@example", "test@", "wix.com", "wor
 _RESIZE_PARAMS = re.compile(r"[?&](w|width|h|height|resize|size|fit|crop|quality|q)=[^&]*", re.IGNORECASE)
 
 
+def _ssrf_event_hook(request: httpx.Request) -> None:
+    """Validate every request (including redirects) against SSRF rules."""
+    if not _is_safe_url(str(request.url)):
+        raise ValueError(f"URL blocked by SSRF protection (redirect): {request.url}")
+
+
 async def fetch_page(url: str, timeout: float = 15.0) -> tuple[str, str]:
     """Fetch a page and return (html, final_url) after redirects."""
     if not _is_safe_url(url):
         raise ValueError(f"URL blocked by SSRF protection: {url}")
 
+    max_size = 10 * 1024 * 1024  # 10MB
+
     async with httpx.AsyncClient(
-        headers=HEADERS, follow_redirects=True, timeout=timeout, max_redirects=5
+        headers=HEADERS,
+        follow_redirects=True,
+        timeout=timeout,
+        max_redirects=5,
+        event_hooks={"request": [_ssrf_event_hook]},
     ) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
+        # Stream to enforce size limit before reading entire body
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
 
-        max_size = 10 * 1024 * 1024  # 10MB
-        if int(resp.headers.get("content-length", 0)) > max_size:
-            raise ValueError(f"Response too large: {resp.headers.get('content-length')} bytes")
+            content_length = resp.headers.get("content-length")
+            if content_length and int(content_length) > max_size:
+                raise ValueError(f"Response too large: {content_length} bytes")
 
-        content_type = resp.headers.get("content-type", "")
-        if not any(ct in content_type for ct in ("text/html", "text/plain", "application/xhtml")):
-            raise ValueError(f"Unexpected content type: {content_type}")
+            content_type = resp.headers.get("content-type", "")
+            if not any(ct in content_type for ct in ("text/html", "text/plain", "application/xhtml")):
+                raise ValueError(f"Unexpected content type: {content_type}")
 
-        return resp.text, str(resp.url)
+            # Read with size limit
+            chunks = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > max_size:
+                    raise ValueError(f"Response body exceeds {max_size} bytes limit")
+                chunks.append(chunk)
+
+            body = b"".join(chunks)
+            return body.decode(resp.encoding or "utf-8", errors="replace"), str(resp.url)
 
 
 async def extract_all(html: str, base_url: str) -> dict:
@@ -114,6 +137,7 @@ async def extract_all(html: str, base_url: str) -> dict:
         "colors": _extract_colors(soup, html, external_css),
         "images": _extract_images(soup, base_url),
         "logo_url": _extract_logo(soup, base_url),
+        "favicon_url": _extract_favicon(soup, base_url),
         "meta_info": _extract_meta(soup),
         "html_hash": hashlib.sha256(html.encode()).hexdigest(),
     }
@@ -814,6 +838,47 @@ def _extract_logo(soup: BeautifulSoup, base_url: str) -> str | None:
             return urljoin(base_url, link["href"])
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Favicon
+# ---------------------------------------------------------------------------
+
+def _extract_favicon(soup: BeautifulSoup, base_url: str) -> str | None:
+    """Extract the favicon URL from the page, preferring high-resolution versions."""
+    # 1. apple-touch-icon (highest quality, typically 180x180)
+    for rel in ["apple-touch-icon", "apple-touch-icon-precomposed"]:
+        link = soup.find("link", rel=rel)
+        if link and link.get("href"):
+            return urljoin(base_url, link["href"])
+
+    # 2. Explicit icon links — prefer largest size
+    icon_links = soup.find_all("link", rel=lambda r: r and "icon" in r if isinstance(r, list) else r == "icon")
+    if not icon_links:
+        icon_links = soup.find_all("link", rel="shortcut icon")
+
+    best_url = None
+    best_size = 0
+    for link in icon_links:
+        href = link.get("href")
+        if not href:
+            continue
+        sizes = link.get("sizes", "")
+        size = 0
+        if sizes and "x" in sizes.lower():
+            try:
+                size = int(sizes.lower().split("x")[0])
+            except (ValueError, IndexError):
+                pass
+        if size > best_size or best_url is None:
+            best_size = size
+            best_url = urljoin(base_url, href)
+
+    if best_url:
+        return best_url
+
+    # 3. Fallback: /favicon.ico at root
+    return urljoin(base_url, "/favicon.ico")
 
 
 # ---------------------------------------------------------------------------

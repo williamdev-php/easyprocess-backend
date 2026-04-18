@@ -246,9 +246,14 @@ async def log_settings_change(
 
 
 def get_client_ip(request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Extract client IP, only trusting X-Forwarded-For behind a reverse proxy in production."""
+    if settings.ENVIRONMENT == "production":
+        # In production behind a trusted proxy (Railway, Vercel, etc.),
+        # use the first IP in X-Forwarded-For (set by the proxy).
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    # In development or if no proxy header, use the direct connection IP.
     if request.client:
         return request.client.host
     return None
