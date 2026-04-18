@@ -200,6 +200,12 @@ class GeneratedSite(Base):
     ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     generation_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Claim token for draft ownership transfer
+    claim_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"), nullable=True
+    )
+
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -222,6 +228,39 @@ class GeneratedSite(Base):
         Index("idx_generated_sites_lead_id", "lead_id"),
         Index("idx_generated_sites_subdomain", "subdomain"),
         Index("idx_generated_sites_status", "status"),
+        {"schema": SCHEMA},
+    )
+
+
+class SiteDraft(Base):
+    """Auto-saved draft for the site editor.
+
+    Stores in-progress edits separately from the published site_data.
+    One draft per site — upserted on every auto-save.
+    """
+    __tablename__ = "site_drafts"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    site_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(f"{SCHEMA}.generated_sites.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    draft_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    site: Mapped[GeneratedSite] = relationship("GeneratedSite")
+
+    __table_args__ = (
+        Index("idx_site_drafts_site_id", "site_id"),
         {"schema": SCHEMA},
     )
 

@@ -171,6 +171,25 @@ class UpdateSiteDataInput:
 
 
 @strawberry.input
+class SaveDraftInput:
+    site_id: str
+    draft_data: JSON
+
+
+@strawberry.type
+class DraftType:
+    site_id: str
+    draft_data: JSON
+    updated_at: datetime
+
+
+@strawberry.type
+class PublishResult:
+    success: bool
+    site: GeneratedSiteType
+
+
+@strawberry.input
 class LeadFilterInput:
     status: str | None = None
     industry: str | None = None

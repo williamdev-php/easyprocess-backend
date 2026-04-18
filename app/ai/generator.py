@@ -46,9 +46,9 @@ _COST_PER_1M: dict[str, float] = {
 
 
 _VALID_TOP_LEVEL_KEYS = {
-    "meta", "theme", "branding", "business", "hero", "about",
-    "features", "stats", "services", "process", "gallery", "team",
-    "testimonials", "faq", "cta", "contact", "seo",
+    "meta", "theme", "branding", "business", "section_order",
+    "hero", "about", "features", "stats", "services", "process",
+    "gallery", "team", "testimonials", "faq", "cta", "contact", "seo",
 }
 
 

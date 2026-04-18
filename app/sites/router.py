@@ -18,12 +18,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.cache import cache
 from app.database import get_db
 from app.email.service import process_resend_webhook
 from app.sites.migration import normalize_site_data
-from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Lead, PageView, SiteStatus
+from app.auth.dependencies import get_current_user
+from app.auth.models import User
+from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Lead, LeadStatus, PageView, SiteStatus
 from app.sites.site_schema import SiteSchema
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
@@ -99,6 +102,19 @@ async def resolve_site(
     if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
+    # If resolved via subdomain, check if there's an active custom domain → redirect
+    redirect_to: str | None = None
+    if subdomain and site.id:
+        cd_result = await db.execute(
+            select(CustomDomain.domain).where(
+                CustomDomain.site_id == site.id,
+                CustomDomain.status == DomainStatus.ACTIVE,
+            )
+        )
+        active_domain = cd_result.scalar_one_or_none()
+        if active_domain:
+            redirect_to = f"https://{active_domain}"
+
     response = {
         "id": site.id,
         "site_data": normalize_site_data(site.site_data or {}),
@@ -106,6 +122,7 @@ async def resolve_site(
         "status": site.status.value,
         "subdomain": site.subdomain,
         "custom_domain": site.custom_domain,
+        "redirect_to": redirect_to,
     }
 
     # Cache resolved sites for 5 minutes
@@ -156,6 +173,87 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
     return response
 
 
+# ---------------------------------------------------------------------------
+# Claim: public showcase & ownership transfer
+# ---------------------------------------------------------------------------
+
+
+@router.get("/claim/{token}")
+async def get_claim_info(token: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Public endpoint: get site preview info for the claim showcase page."""
+    result = await db.execute(
+        select(GeneratedSite)
+        .where(
+            GeneratedSite.claim_token == token,
+            GeneratedSite.status != SiteStatus.ARCHIVED,
+        )
+        .options(selectinload(GeneratedSite.lead))
+    )
+    site = result.scalar_one_or_none()
+    if not site:
+        raise HTTPException(status_code=404, detail="Invalid or expired claim link")
+
+    if site.claimed_by:
+        raise HTTPException(status_code=410, detail="This site has already been claimed")
+
+    site_data = normalize_site_data(site.site_data or {})
+    branding = site_data.get("branding", {})
+    business = site_data.get("business", {})
+    meta = site_data.get("meta", {})
+    hero = site_data.get("hero", {}) or {}
+
+    return {
+        "site_id": site.id,
+        "subdomain": site.subdomain,
+        "logo_url": branding.get("logo_url"),
+        "business_name": business.get("name", ""),
+        "tagline": business.get("tagline", ""),
+        "industry": site.lead.industry if site.lead else None,
+        "headline": hero.get("headline", ""),
+        "description": meta.get("description", ""),
+        "created_at": site.created_at.isoformat() if site.created_at else None,
+        "colors": branding.get("colors", {}),
+    }
+
+
+@router.post("/claim/{token}")
+async def claim_site(
+    token: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Claim ownership of a draft site. Requires authentication."""
+    result = await db.execute(
+        select(GeneratedSite)
+        .where(
+            GeneratedSite.claim_token == token,
+            GeneratedSite.status != SiteStatus.ARCHIVED,
+        )
+        .options(selectinload(GeneratedSite.lead))
+    )
+    site = result.scalar_one_or_none()
+    if not site:
+        raise HTTPException(status_code=404, detail="Invalid or expired claim link")
+
+    if site.claimed_by:
+        raise HTTPException(status_code=410, detail="This site has already been claimed")
+
+    # Transfer ownership: update lead.created_by to point to the claiming user
+    if site.lead:
+        site.lead.created_by = str(current_user.id)
+        site.lead.status = LeadStatus.CONVERTED
+
+    site.claimed_by = str(current_user.id)
+    site.claim_token = None  # Invalidate token after claim
+    await db.commit()
+
+    # Invalidate caches
+    await cache.delete(f"site:data:{site.id}")
+    await cache.delete("admin:dashboard_stats")
+
+    return {"ok": True, "site_id": site.id}
+
+
 @router.get("/{site_id}")
 async def get_site(site_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Get full site data for frontend rendering. Cached."""
@@ -170,12 +268,17 @@ async def get_site(site_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     if not site or site.status == SiteStatus.ARCHIVED:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    response = {
+    response: dict = {
         "id": site.id,
         "site_data": normalize_site_data(site.site_data or {}),
         "template": site.template,
         "status": site.status.value,
     }
+
+    # Include draft claim info so the viewer can show a banner
+    if site.status == SiteStatus.DRAFT:
+        response["created_at"] = site.created_at.isoformat() if site.created_at else None
+        response["claim_token"] = site.claim_token if not site.claimed_by else None
 
     # Only cache published sites (drafts may change)
     if site.status == SiteStatus.PUBLISHED:

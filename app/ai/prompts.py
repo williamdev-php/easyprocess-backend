@@ -34,6 +34,7 @@ REGLER:
 5. Varje content-block (hero, about, services, etc.) är en separat nyckel. Sätt till null om sektionen inte är relevant.
 6. Inkludera INTE navigation, footer eller page-struktur — det genereras automatiskt.
 7. Fyll i ALLA relevanta sektioner — hero, about, features, stats, services, process, gallery, team, testimonials, faq, cta, contact.
+7b. Inkludera en "section_order"-nyckel med en lista av sektionsnamn i optimal visningsordning, t.ex. ["hero", "about", "services", "features", "stats", "process", "testimonials", "team", "gallery", "faq", "cta", "contact"]. Anpassa ordningen efter bransch — t.ex. för en restaurang bör galleriet komma tidigt.
 8. CTA-knappar ska ha href satt till "#contact".
 9. Generera MINST 6-8 services om företaget har tjänster.
 10. Generera 4-6 features/fördelar.

@@ -226,7 +226,12 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     site.subdomain = await generate_unique_subdomain(
                         db, lead.business_name, lead.website_url, exclude_site_id=site.id
                     )
+                # Ensure claim token exists
+                if not site.claim_token:
+                    import secrets
+                    site.claim_token = secrets.token_urlsafe(32)
             else:
+                import secrets
                 subdomain = await generate_unique_subdomain(
                     db, lead.business_name, lead.website_url
                 )
@@ -238,6 +243,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     generation_cost_usd=gen_result.cost_usd,
                     status=SiteStatus.DRAFT,
                     subdomain=subdomain,
+                    claim_token=secrets.token_urlsafe(32),
                 )
                 db.add(site)
 

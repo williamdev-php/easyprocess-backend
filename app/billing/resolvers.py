@@ -30,8 +30,15 @@ from app.database import async_session
 
 logger = logging.getLogger(__name__)
 
+FREE_FEATURES = [
+    "1 hemsida (utkast)",
+    "Subdomän på qvickosite.com",
+    "Grundläggande redigering",
+]
+
 BASIC_FEATURES = [
     "AI-genererade hemsidor",
+    "Publicera hemsida",
     "Egen domän",
     "Grundläggande statistik",
     "SEO-verktyg",
@@ -141,6 +148,13 @@ class BillingQuery:
     @strawberry.field
     async def available_plans(self) -> list[PlanType]:
         return [
+            PlanType(
+                key="free",
+                name="Free",
+                price_sek=0,
+                trial_days=0,
+                features=FREE_FEATURES,
+            ),
             PlanType(
                 key="basic",
                 name="Basic",

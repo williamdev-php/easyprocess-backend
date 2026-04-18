@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from app.auth.models import AuditEventType, User
 from app.auth.resolvers import _get_user_from_info, _require_user
 from app.auth.service import log_settings_change
+from app.billing.service import get_active_subscription
 from app.cache import cache
 from app.database import async_session
 from app.sites.site_schema import SiteSchema
@@ -27,6 +28,7 @@ from app.sites.graphql_types import (
     DomainPurchaseType,
     DomainSearchResult,
     DomainTransferInfoType,
+    DraftType,
     GeneratedSiteType,
     InboundEmailFilterInput,
     InboundEmailListType,
@@ -35,6 +37,8 @@ from app.sites.graphql_types import (
     LeadListType,
     LeadType,
     OutreachEmailType,
+    PublishResult,
+    SaveDraftInput,
     ScrapedDataType,
     SiteAnalyticsType,
     SubdomainInfoType,
@@ -52,10 +56,51 @@ from app.sites.models import (
     OutreachEmail,
     PageView,
     ScrapedData,
+    SiteDraft,
     SiteStatus,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Free plan helpers
+# ---------------------------------------------------------------------------
+
+async def _has_active_subscription(db, user: User) -> bool:
+    """Check if user has an active (or trialing) subscription."""
+    sub = await get_active_subscription(db, user.id)
+    return sub is not None
+
+
+async def _require_subscription(db, user: User, action: str = "This action") -> None:
+    """Raise if user has no active subscription (free plan)."""
+    if user.is_superuser:
+        return
+    if not await _has_active_subscription(db, user):
+        raise ValueError(
+            f"{action} kräver ett aktivt abonnemang. "
+            "Uppgradera din plan under Betalning."
+        )
+
+
+async def _check_site_limit(db, user: User) -> None:
+    """Free plan: max 1 site. Raise if user already has one and has no subscription."""
+    if user.is_superuser:
+        return
+    if await _has_active_subscription(db, user):
+        return
+    count_result = await db.execute(
+        select(func.count(GeneratedSite.id))
+        .join(Lead, GeneratedSite.lead_id == Lead.id)
+        .where(Lead.created_by == str(user.id))
+    )
+    count = count_result.scalar() or 0
+    if count >= 1:
+        raise ValueError(
+            "Free-planen tillåter max 1 hemsida. "
+            "Uppgradera din plan för att skapa fler."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +298,7 @@ def _domain_to_gql(d: CustomDomain, vercel_verification: dict | None = None) -> 
         site_id=d.site_id,
         status=d.status.value,
         site_subdomain=d.site.subdomain if d.site else None,
-        site_business_name=None,  # Populated separately if needed
+        site_business_name=d.site.lead.business_name if d.site and d.site.lead else None,
         verified_at=d.verified_at,
         created_at=d.created_at,
         updated_at=d.updated_at,
@@ -446,7 +491,7 @@ class SiteQuery:
             result = await db.execute(
                 select(CustomDomain)
                 .where(CustomDomain.user_id == str(user.id))
-                .options(selectinload(CustomDomain.site))
+                .options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
                 .order_by(CustomDomain.created_at.desc())
             )
             domains = result.scalars().all()
@@ -980,18 +1025,193 @@ class SiteMutation:
 
             return _site_to_gql(site, site.lead)
 
+    # ------------------------------------------------------------------
+    # Draft management
+    # ------------------------------------------------------------------
+
     @strawberry.mutation
-    async def publish_site(self, info: Info, site_id: str) -> GeneratedSiteType:
-        """Publish a site (superadmin only)."""
-        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+    async def save_draft(self, info: Info, input: SaveDraftInput) -> DraftType:
+        """Auto-save editor draft. No cache invalidation — draft only."""
+        user = _require_user(await _get_user_from_info(info))
 
         async with async_session() as db:
             result = await db.execute(
-                select(GeneratedSite).where(GeneratedSite.id == site_id)
+                select(GeneratedSite)
+                .where(GeneratedSite.id == input.site_id)
+                .options(selectinload(GeneratedSite.lead))
             )
             site = result.scalar_one_or_none()
             if not site:
                 raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("You do not have permission to edit this site")
+
+            # Upsert draft
+            draft_result = await db.execute(
+                select(SiteDraft).where(SiteDraft.site_id == input.site_id)
+            )
+            draft = draft_result.scalar_one_or_none()
+
+            if draft:
+                draft.draft_data = input.draft_data
+                draft.updated_at = datetime.now(timezone.utc)
+            else:
+                draft = SiteDraft(
+                    site_id=input.site_id,
+                    draft_data=input.draft_data,
+                )
+                db.add(draft)
+
+            await db.commit()
+            await db.refresh(draft)
+
+            return DraftType(
+                site_id=draft.site_id,
+                draft_data=draft.draft_data,
+                updated_at=draft.updated_at,
+            )
+
+    @strawberry.mutation
+    async def load_draft(self, info: Info, site_id: str) -> DraftType | None:
+        """Load the current draft for a site, if one exists."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("You do not have permission to view this site")
+
+            draft_result = await db.execute(
+                select(SiteDraft).where(SiteDraft.site_id == site_id)
+            )
+            draft = draft_result.scalar_one_or_none()
+            if not draft:
+                return None
+
+            return DraftType(
+                site_id=draft.site_id,
+                draft_data=draft.draft_data,
+                updated_at=draft.updated_at,
+            )
+
+    @strawberry.mutation
+    async def publish_site_data(self, info: Info, input: UpdateSiteDataInput) -> PublishResult:
+        """Publish site data: save to site_data, delete draft, invalidate all caches."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == input.site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("You do not have permission to edit this site")
+
+            # Validate
+            try:
+                SiteSchema.model_validate(input.site_data)
+            except ValidationError as e:
+                raise ValueError(f"Invalid site data: {e}")
+
+            # Save to published site_data
+            site.site_data = input.site_data
+            site.updated_at = datetime.now(timezone.utc)
+
+            # Delete draft
+            draft_result = await db.execute(
+                select(SiteDraft).where(SiteDraft.site_id == input.site_id)
+            )
+            draft = draft_result.scalar_one_or_none()
+            if draft:
+                await db.delete(draft)
+
+            await db.commit()
+            await db.refresh(site)
+
+            # Invalidate ALL viewer caches for this site
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+
+            # Trigger viewer ISR revalidation
+            asyncio.ensure_future(_revalidate_viewer(site.id, site.subdomain))
+
+            return PublishResult(
+                success=True,
+                site=_site_to_gql(site, site.lead),
+            )
+
+    @strawberry.mutation
+    async def discard_draft(self, info: Info, site_id: str) -> bool:
+        """Discard draft and revert to published version."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("You do not have permission to edit this site")
+
+            draft_result = await db.execute(
+                select(SiteDraft).where(SiteDraft.site_id == site_id)
+            )
+            draft = draft_result.scalar_one_or_none()
+            if draft:
+                await db.delete(draft)
+                await db.commit()
+
+            return True
+
+    @strawberry.mutation
+    async def publish_site(self, info: Info, site_id: str) -> GeneratedSiteType:
+        """Publish a site. Requires active subscription (or superadmin)."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with async_session() as db:
+            # Require subscription for non-superusers
+            await _require_subscription(db, user, "Publicering av hemsida")
+
+            result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            # Verify ownership (non-superusers)
+            if not user.is_superuser:
+                is_owner = site.lead and site.lead.created_by == str(user.id)
+                if not is_owner:
+                    raise PermissionError("You do not have permission to publish this site")
 
             site.status = SiteStatus.PUBLISHED
             site.published_at = datetime.now(timezone.utc)
@@ -1000,7 +1220,7 @@ class SiteMutation:
             await db.refresh(site)
 
             await cache.delete(f"site:{site.id}")
-            return _site_to_gql(site)
+            return _site_to_gql(site, site.lead)
 
     @strawberry.mutation
     async def track_site_view(self, info: Info, site_id: str) -> bool:
@@ -1123,6 +1343,9 @@ class SiteMutation:
             raise ValueError("Invalid domain format")
 
         async with async_session() as db:
+            # Free plan: no custom domains
+            await _require_subscription(db, user, "Egen domän")
+
             # Check if domain already exists
             existing = await db.execute(
                 select(CustomDomain).where(CustomDomain.domain == domain)
@@ -1151,7 +1374,14 @@ class SiteMutation:
             )
             db.add(custom_domain)
             await db.commit()
-            await db.refresh(custom_domain)
+
+            # Re-fetch with site relationship eagerly loaded
+            result = await db.execute(
+                select(CustomDomain)
+                .where(CustomDomain.id == custom_domain.id)
+                .options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
+            )
+            custom_domain = result.scalar_one()
 
             # Register domain with Vercel (best-effort)
             vercel_info = None
@@ -1265,7 +1495,13 @@ class SiteMutation:
             )
             await db.commit()
 
-            await db.refresh(domain)
+            # Re-fetch with site relationship eagerly loaded
+            result = await db.execute(
+                select(CustomDomain)
+                .where(CustomDomain.id == domain.id)
+                .options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
+            )
+            domain = result.scalar_one()
             return _domain_to_gql(domain)
 
     @strawberry.mutation
@@ -1282,7 +1518,7 @@ class SiteMutation:
                 select(CustomDomain).where(
                     CustomDomain.id == domain_id,
                     CustomDomain.user_id == str(user.id),
-                )
+                ).options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
             )
             domain = result.scalar_one_or_none()
             if not domain:
@@ -1307,7 +1543,13 @@ class SiteMutation:
                 domain.status = DomainStatus.FAILED
 
             await db.commit()
-            await db.refresh(domain)
+            # Re-fetch with site relationship to avoid lazy-load in _domain_to_gql
+            result = await db.execute(
+                select(CustomDomain)
+                .where(CustomDomain.id == domain.id)
+                .options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
+            )
+            domain = result.scalar_one()
             return _domain_to_gql(domain, vercel_verification=vercel_info)
 
     @strawberry.mutation
@@ -1575,3 +1817,19 @@ async def _run_pipeline_bg(lead_id: str) -> None:
             await db.commit()
     except Exception:
         logger.exception("Background pipeline failed for lead %s", lead_id)
+
+
+async def _revalidate_viewer(site_id: str, subdomain: str | None) -> None:
+    """Trigger ISR on-demand revalidation in the viewer app."""
+    import httpx
+    from app.config import settings
+
+    viewer_url = getattr(settings, "VIEWER_URL", None) or "http://localhost:3001"
+    paths = [f"/preview/{site_id}", f"/{site_id}"]
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        for path in paths:
+            try:
+                await client.get(f"{viewer_url}/api/revalidate", params={"path": path})
+            except Exception:
+                pass  # Best effort — viewer cache has TTL fallback

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # Resend (email)
     RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = "noreply@qvicko.se"
+    RESEND_FROM_EMAIL: str = "noreply@qvicko.com"
     RESEND_FROM_NAME: str = "Qvicko"
     RESEND_WEBHOOK_SECRET: str = ""
     RESEND_INBOUND_WEBHOOK_SECRET: str = ""
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     EMAIL_HELP: str = "help@qvicko.com"
     EMAIL_NOREPLY: str = "noreply@qvicko.com"
 
-    BASE_DOMAIN: str = "qvicko.se"  # e.g. slug.qvicko.se
+    BASE_DOMAIN: str = "qvickosite.com"  # e.g. slug.qvickosite.com
 
     # Vercel (for custom domain management on viewer project)
     VERCEL_API_TOKEN: str = ""
