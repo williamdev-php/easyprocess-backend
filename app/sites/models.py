@@ -45,6 +45,7 @@ class SiteStatus(str, enum.Enum):
     PUBLISHED = "PUBLISHED"
     PURCHASED = "PURCHASED"
     ARCHIVED = "ARCHIVED"
+    PAUSED = "PAUSED"
 
 
 class DomainStatus(str, enum.Enum):
@@ -209,6 +210,9 @@ class GeneratedSite(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Status before pause/delete, so we can restore it
+    previous_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -261,6 +265,34 @@ class SiteDraft(Base):
 
     __table_args__ = (
         Index("idx_site_drafts_site_id", "site_id"),
+        {"schema": SCHEMA},
+    )
+
+
+class SiteVersion(Base):
+    """Snapshot of site_data taken on each publish for version history."""
+    __tablename__ = "site_versions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    site_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(f"{SCHEMA}.generated_sites.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    site_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_site_versions_site_id", "site_id"),
+        Index("idx_site_versions_site_version", "site_id", "version_number"),
         {"schema": SCHEMA},
     )
 
@@ -478,6 +510,35 @@ class DomainPurchase(Base):
     __table_args__ = (
         Index("idx_domain_purchases_user_id", "user_id"),
         Index("idx_domain_purchases_domain", "domain"),
+        {"schema": SCHEMA},
+    )
+
+
+class SiteDeletionToken(Base):
+    """Token for email-confirmed site deletion."""
+    __tablename__ = "site_deletion_tokens"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    site_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.generated_sites.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_site_deletion_tokens_site_id", "site_id"),
+        Index("idx_site_deletion_tokens_token_hash", "token_hash"),
         {"schema": SCHEMA},
     )
 

@@ -31,6 +31,7 @@ from app.billing.service import (
     list_payment_methods,
     reactivate_subscription,
 )
+from app.cache import cache
 from app.config import settings
 from app.database import get_db
 
@@ -87,6 +88,8 @@ async def subscribe_endpoint(
         )
 
     sub = await create_subscription_after_setup(db, user, plan=body.plan, with_trial=True)
+    await cache.delete(f"subscription:{user.id}")
+    await cache.delete(f"sub_active:{user.id}")
     return {
         "subscription_id": sub.id,
         "stripe_subscription_id": sub.stripe_subscription_id,
@@ -108,6 +111,8 @@ async def cancel_subscription_endpoint(
     sub = await cancel_subscription(db, user)
     if not sub:
         raise HTTPException(status_code=404, detail="Ingen aktiv prenumeration hittades.")
+    await cache.delete(f"subscription:{user.id}")
+    await cache.delete(f"sub_active:{user.id}")
     return {"status": sub.status.value, "cancel_at_period_end": sub.cancel_at_period_end}
 
 
@@ -119,6 +124,8 @@ async def reactivate_subscription_endpoint(
     sub = await reactivate_subscription(db, user)
     if not sub:
         raise HTTPException(status_code=404, detail="Ingen prenumeration att återaktivera.")
+    await cache.delete(f"subscription:{user.id}")
+    await cache.delete(f"sub_active:{user.id}")
     return {"status": sub.status.value, "cancel_at_period_end": sub.cancel_at_period_end}
 
 
@@ -274,9 +281,9 @@ async def stripe_webhook(request: Request):
 
     logger.info("Stripe webhook: %s (id=%s)", event.type, event.id)
 
-    from app.database import async_session
+    from app.database import get_db_session
 
-    async with async_session() as db:
+    async with get_db_session() as db:
         try:
             if event.type == "customer.subscription.created":
                 await handle_subscription_created(db, event.data.object)
@@ -298,6 +305,24 @@ async def stripe_webhook(request: Request):
                 logger.debug("Unhandled Stripe event type: %s", event.type)
 
             await db.commit()
+
+            # Invalidate subscription caches on any subscription event
+            if event.type.startswith("customer.subscription."):
+                sub_obj = event.data.object
+                customer_id = sub_obj.get("customer") if isinstance(sub_obj, dict) else getattr(sub_obj, "customer", None)
+                if customer_id:
+                    # Find user by stripe_customer_id and invalidate
+                    from app.billing.models import Subscription as SubModel
+                    result = await db.execute(
+                        select(SubModel.user_id).where(
+                            SubModel.stripe_customer_id == customer_id
+                        ).limit(1)
+                    )
+                    user_id = result.scalar_one_or_none()
+                    if user_id:
+                        await cache.delete(f"subscription:{user_id}")
+                        await cache.delete(f"sub_active:{user_id}")
+
         except Exception:
             await db.rollback()
             logger.exception("Error processing Stripe webhook %s (id=%s)", event.type, event.id)
@@ -406,6 +431,14 @@ async def _handle_domain_purchase_success(db: AsyncSession, payment_intent) -> N
     db.add(payment)
 
     await db.flush()
+
+    # Invalidate site caches after domain assignment
+    if site_id:
+        await cache.delete(f"site:{site_id}")
+        await cache.delete(f"site:data:{site_id}")
+        await cache.delete(f"site:meta:{site_id}")
+        await cache.delete(f"resolve:dom:{domain}")
+
     logger.info("Domain purchase completed: %s for user %s", domain, user_id)
 
 

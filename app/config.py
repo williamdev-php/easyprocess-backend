@@ -28,7 +28,15 @@ class Settings(BaseSettings):
     SUPABASE_STORAGE_BUCKET: str = "qvicko"
 
     # Redis
-    REDIS_URL: str = ""
+    REDIS_URL: str = ""  # Proxy URL for development (e.g. redis://nozomi.proxy.rlwy.net:56479)
+    REDIS_INTERNAL_URL: str = ""  # Internal URL for production (e.g. redis://redis.railway.internal:6379)
+
+    @property
+    def effective_redis_url(self) -> str:
+        """Use internal Redis in production, proxy URL in development."""
+        if self.ENVIRONMENT == "production" and self.REDIS_INTERNAL_URL:
+            return self.REDIS_INTERNAL_URL
+        return self.REDIS_URL
 
     # Resend (email)
     RESEND_API_KEY: str = ""

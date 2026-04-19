@@ -18,8 +18,9 @@ from app.database import engine, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
 from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog  # noqa: F401
-from app.sites.models import Lead, ScrapedData, GeneratedSite, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase  # noqa: F401
+from app.sites.models import Lead, ScrapedData, GeneratedSite, SiteVersion, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase  # noqa: F401
 from app.billing.models import Subscription, Payment, BillingDetails  # noqa: F401
+from app.media.models import MediaFile  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -112,12 +113,14 @@ from app.sites.router import router as sites_router  # noqa: E402
 from app.sites.router import webhook_router  # noqa: E402
 from app.billing.router import router as billing_router  # noqa: E402
 from app.billing.router import webhook_router as stripe_webhook_router  # noqa: E402
+from app.media.router import router as media_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
 app.include_router(webhook_router)
 app.include_router(billing_router)
 app.include_router(stripe_webhook_router)
+app.include_router(media_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

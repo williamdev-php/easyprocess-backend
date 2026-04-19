@@ -13,6 +13,7 @@ class UserType:
     company_name: str | None = None
     org_number: str | None = None
     phone: str | None = None
+    country: str | None = None
     avatar_url: str | None = None
     locale: str
     role: str
@@ -52,6 +53,7 @@ class UpdateProfileInput:
     phone: str | None = None
     avatar_url: str | None = None
     locale: str | None = None
+    country: str | None = None
 
 
 @strawberry.input

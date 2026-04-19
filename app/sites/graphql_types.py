@@ -32,6 +32,7 @@ class SiteStatusGQL(enum.Enum):
     PUBLISHED = "PUBLISHED"
     PURCHASED = "PURCHASED"
     ARCHIVED = "ARCHIVED"
+    PAUSED = "PAUSED"
 
 
 @strawberry.enum
@@ -355,3 +356,13 @@ class DomainTransferInfoType:
     is_locked: bool
     auth_code: str | None = None
     instructions: str = ""
+
+
+@strawberry.type
+class SiteVersionType:
+    id: str
+    site_id: str
+    version_number: int
+    site_data: JSON
+    label: str | None = None
+    created_at: datetime

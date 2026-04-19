@@ -69,7 +69,7 @@ _EMAIL_IGNORE = {"noreply", "no-reply", "info@example", "test@", "wix.com", "wor
 _RESIZE_PARAMS = re.compile(r"[?&](w|width|h|height|resize|size|fit|crop|quality|q)=[^&]*", re.IGNORECASE)
 
 
-def _ssrf_event_hook(request: httpx.Request) -> None:
+async def _ssrf_event_hook(request: httpx.Request) -> None:
     """Validate every request (including redirects) against SSRF rules."""
     if not _is_safe_url(str(request.url)):
         raise ValueError(f"URL blocked by SSRF protection (redirect): {request.url}")

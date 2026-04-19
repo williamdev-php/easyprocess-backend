@@ -30,6 +30,8 @@ from app.auth.service import (
     create_user,
     get_client_ip,
     get_user_by_email,
+    get_user_by_id,
+    invalidate_user_cache,
     is_account_locked,
     log_audit_event,
     log_settings_change,
@@ -152,6 +154,7 @@ async def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     await reset_failed_logins(db, user)
+    await invalidate_user_cache(user.id, user.email)
 
     session, raw_token = await create_session(db, user.id, ip_address=ip, user_agent=ua)
     await log_audit_event(db, AuditEventType.LOGIN, user.id, ip, ua)
@@ -252,6 +255,11 @@ async def update_profile(
     ALLOWED_PROFILE_FIELDS = {"full_name", "company_name", "phone", "avatar_url", "org_number"}
     BILLING_FIELDS = {"billing_street", "billing_city", "billing_zip", "billing_country"}
 
+    # Re-fetch from DB for a session-bound instance (current_user may be cached)
+    db_user = await get_user_by_id(db, current_user.id)
+    if not db_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
     ip = get_client_ip(request)
     ua = request.headers.get("user-agent")
 
@@ -261,37 +269,40 @@ async def update_profile(
     profile_changes: dict[str, tuple[str | None, str | None]] = {}
     for field, value in updates.items():
         if field in ALLOWED_PROFILE_FIELDS:
-            old_val = getattr(current_user, field, None)
+            old_val = getattr(db_user, field, None)
             if old_val != value:
                 profile_changes[field] = (old_val, value)
-            setattr(current_user, field, value)
+            setattr(db_user, field, value)
 
     # Track billing changes for audit
     billing_changes: dict[str, tuple[str | None, str | None]] = {}
     for field, value in updates.items():
         if field in BILLING_FIELDS:
-            old_val = getattr(current_user, field, None)
+            old_val = getattr(db_user, field, None)
             if old_val != value:
                 billing_changes[field] = (old_val, value)
-            setattr(current_user, field, value)
+            setattr(db_user, field, value)
 
     await db.flush()
 
     # Log audit events for changed fields
     if profile_changes:
         await log_settings_change(
-            db, current_user.id, AuditEventType.PROFILE_UPDATE,
-            "user", current_user.id, profile_changes, ip, ua,
+            db, db_user.id, AuditEventType.PROFILE_UPDATE,
+            "user", db_user.id, profile_changes, ip, ua,
         )
 
     if billing_changes:
         await log_settings_change(
-            db, current_user.id, AuditEventType.BILLING_ADDRESS_CHANGE,
-            "user", current_user.id, billing_changes, ip, ua,
+            db, db_user.id, AuditEventType.BILLING_ADDRESS_CHANGE,
+            "user", db_user.id, billing_changes, ip, ua,
         )
 
-    await db.refresh(current_user)
-    return UserResponse.model_validate(current_user)
+    # Invalidate cache so subsequent requests see updated data
+    await invalidate_user_cache(db_user.id, db_user.email)
+
+    await db.refresh(db_user)
+    return UserResponse.model_validate(db_user)
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -301,13 +312,20 @@ async def change_password_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    if not current_user.password_hash or not verify_password(body.current_password, current_user.password_hash):
+    # Re-fetch from DB for a session-bound instance (current_user may be cached)
+    db_user = await get_user_by_id(db, current_user.id)
+    if not db_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not db_user.password_hash or not verify_password(body.current_password, db_user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
-    await change_password(db, current_user, body.new_password)
+    await change_password(db, db_user, body.new_password)
+    await invalidate_user_cache(db_user.id, db_user.email)
+
     ip = get_client_ip(request)
     ua = request.headers.get("user-agent")
-    await log_audit_event(db, AuditEventType.PASSWORD_CHANGE, current_user.id, ip, ua)
+    await log_audit_event(db, AuditEventType.PASSWORD_CHANGE, db_user.id, ip, ua)
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +471,7 @@ async def reset_password(
 
     user = token.user
     await change_password(db, user, body.new_password)
+    await invalidate_user_cache(user.id, user.email)
 
     # Revoke all sessions for security
     await revoke_all_user_sessions(db, user.id)
@@ -501,6 +520,8 @@ async def verify_email(
     user = token.user
     user.is_verified = True
     token.used_at = datetime.now(timezone.utc)
+
+    await invalidate_user_cache(user.id, user.email)
 
     await log_audit_event(
         db, AuditEventType.EMAIL_VERIFIED, user.id,

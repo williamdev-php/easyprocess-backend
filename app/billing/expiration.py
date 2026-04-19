@@ -13,12 +13,13 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.auth.models import User
 from app.billing.models import Subscription, SubscriptionStatus
 from app.config import settings
-from app.database import async_session
-from app.sites.models import GeneratedSite, SiteStatus
+from app.database import get_db_session
+from app.sites.models import GeneratedSite, Lead, SiteStatus
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ async def check_expired_sites() -> None:
     """
     now = datetime.now(timezone.utc)
 
-    async with async_session() as db:
-        # Find sites where expires_at has passed but are still published
+    async with get_db_session() as db:
+        # Find expired sites with lead and user eager-loaded (avoids N+1)
         result = await db.execute(
             select(GeneratedSite)
             .where(
@@ -41,39 +42,46 @@ async def check_expired_sites() -> None:
                 GeneratedSite.expires_at < now,
                 GeneratedSite.status.in_([SiteStatus.PUBLISHED, SiteStatus.PURCHASED]),
             )
+            .options(selectinload(GeneratedSite.lead))
         )
         expired_sites = result.scalars().all()
 
-        for site in expired_sites:
-            days_overdue = (now - site.expires_at).days
+        # Collect all user IDs to batch-load users and subscriptions
+        user_ids = {site.lead.created_by for site in expired_sites if site.lead and site.lead.created_by}
 
-            # Get the site owner
-            from app.sites.models import Lead
-            lead_result = await db.execute(
-                select(Lead).where(Lead.id == site.lead_id)
-            )
-            lead = lead_result.scalar_one_or_none()
-            if not lead or not lead.created_by:
-                continue
+        # Batch load users
+        users_by_id: dict[str, User] = {}
+        if user_ids:
+            user_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+            users_by_id = {u.id: u for u in user_result.scalars().all()}
 
-            user_result = await db.execute(
-                select(User).where(User.id == lead.created_by)
-            )
-            user = user_result.scalar_one_or_none()
-            if not user:
-                continue
-
-            # Check if user has an active subscription (they may have renewed)
+        # Batch load active subscriptions for these users
+        active_subs_by_user: dict[str, Subscription] = {}
+        if user_ids:
             sub_result = await db.execute(
                 select(Subscription).where(
-                    Subscription.user_id == user.id,
+                    Subscription.user_id.in_(user_ids),
                     Subscription.status.in_([
                         SubscriptionStatus.ACTIVE,
                         SubscriptionStatus.TRIALING,
                     ]),
                 )
             )
-            active_sub = sub_result.scalar_one_or_none()
+            for sub in sub_result.scalars().all():
+                active_subs_by_user[sub.user_id] = sub
+
+        for site in expired_sites:
+            days_overdue = (now - site.expires_at).days
+
+            lead = site.lead
+            if not lead or not lead.created_by:
+                continue
+
+            user = users_by_id.get(lead.created_by)
+            if not user:
+                continue
+
+            active_sub = active_subs_by_user.get(user.id)
             if active_sub:
                 # User renewed — extend expires_at
                 if active_sub.current_period_end:

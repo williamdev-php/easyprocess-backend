@@ -19,12 +19,14 @@ from app.auth.service import (
     decode_access_token,
     get_client_ip,
     get_user_by_id,
+    get_user_by_id_cached,
+    invalidate_user_cache,
     log_audit_event,
     revoke_all_user_sessions,
     revoke_session,
     verify_password,
 )
-from app.database import async_session
+from app.database import get_db_session
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +41,7 @@ def _user_to_gql(user: User) -> UserType:
         company_name=user.company_name,
         org_number=user.org_number,
         phone=user.phone,
+        country=user.billing_country,
         avatar_url=user.avatar_url,
         locale=user.locale,
         role=user.role.value,
@@ -61,11 +64,14 @@ async def _get_user_from_info(info: Info) -> User | None:
     user_id = decode_access_token(token)
     if not user_id:
         return None
-    async with async_session() as db:
-        user = await get_user_by_id(db, user_id)
-        if user and not user.is_active:
-            return None
-        return user
+    # Try cache first (skips DB on hit)
+    user = await get_user_by_id_cached(user_id)
+    if user is None:
+        async with get_db_session() as db:
+            user = await get_user_by_id(db, user_id)
+    if user and not user.is_active:
+        return None
+    return user
 
 
 def _require_user(user: User | None) -> User:
@@ -91,7 +97,7 @@ class Query:
         user = _require_user(await _get_user_from_info(info))
         request = info.context["request"]
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Session)
                 .where(
@@ -125,7 +131,7 @@ class Query:
     @strawberry.field
     async def my_audit_log(self, info: Info, limit: int = 50, offset: int = 0) -> list[AuditLogType]:
         user = _require_user(await _get_user_from_info(info))
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(AuditLog)
                 .where(AuditLog.user_id == user.id)
@@ -156,10 +162,16 @@ class Mutation:
     @strawberry.mutation
     async def update_profile(self, info: Info, input: UpdateProfileInput) -> UserType:
         user = _require_user(await _get_user_from_info(info))
-        async with async_session() as db:
+        async with get_db_session() as db:
             db_user = await get_user_by_id(db, user.id)
             if not db_user:
                 raise ValueError("User not found")
+
+            # Validate country code if provided
+            if input.country is not None and input.country != "":
+                from app.auth.validators import VALID_COUNTRY_CODES
+                if input.country.upper() not in VALID_COUNTRY_CODES:
+                    raise ValueError(f"Invalid country code: {input.country}")
 
             updates = {k: v for k, v in {
                 "full_name": input.full_name,
@@ -168,6 +180,7 @@ class Mutation:
                 "phone": input.phone,
                 "avatar_url": input.avatar_url,
                 "locale": input.locale,
+                "billing_country": input.country.upper() if input.country else input.country,
             }.items() if v is not None}
 
             for field, value in updates.items():
@@ -175,13 +188,14 @@ class Mutation:
 
             db_user.updated_at = datetime.now(timezone.utc)
             await db.commit()
+            await invalidate_user_cache(db_user.id, db_user.email)
             await db.refresh(db_user)
             return _user_to_gql(db_user)
 
     @strawberry.mutation
     async def change_password(self, info: Info, input: ChangePasswordInput) -> bool:
         user = _require_user(await _get_user_from_info(info))
-        async with async_session() as db:
+        async with get_db_session() as db:
             db_user = await get_user_by_id(db, user.id)
             if not db_user or not db_user.password_hash:
                 raise ValueError("Cannot change password")
@@ -190,6 +204,7 @@ class Mutation:
                 raise ValueError("Current password is incorrect")
 
             await change_password(db, db_user, input.new_password)
+            await invalidate_user_cache(db_user.id, db_user.email)
 
             request = info.context["request"]
             ip = get_client_ip(request)
@@ -202,7 +217,7 @@ class Mutation:
     @strawberry.mutation
     async def revoke_session(self, info: Info, session_id: str) -> bool:
         user = _require_user(await _get_user_from_info(info))
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Session).where(
                     and_(Session.id == session_id, Session.user_id == user.id)
@@ -225,7 +240,7 @@ class Mutation:
     @strawberry.mutation
     async def revoke_all_sessions(self, info: Info) -> int:
         user = _require_user(await _get_user_from_info(info))
-        async with async_session() as db:
+        async with get_db_session() as db:
             count = await revoke_all_user_sessions(db, user.id)
 
             request = info.context["request"]

@@ -42,6 +42,7 @@ class UserResponse(BaseModel):
     company_name: str | None = None
     org_number: str | None = None
     phone: str | None = None
+    country: str | None = None
     avatar_url: str | None = None
     locale: str
     role: str
@@ -58,6 +59,11 @@ class UserResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    def model_post_init(self, __context: object) -> None:
+        # Expose billing_country as country for frontend compatibility
+        if self.country is None and self.billing_country:
+            self.country = self.billing_country
 
 
 class TokenResponse(BaseModel):

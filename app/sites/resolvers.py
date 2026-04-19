@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import strawberry
 from sqlalchemy import func, select, or_
 from sqlalchemy.orm import selectinload
+from strawberry.scalars import JSON
 from strawberry.types import Info
 
 from pydantic import ValidationError
@@ -16,7 +17,7 @@ from app.auth.resolvers import _get_user_from_info, _require_user
 from app.auth.service import log_settings_change
 from app.billing.service import get_active_subscription
 from app.cache import cache
-from app.database import async_session
+from app.database import get_db_session
 from app.sites.site_schema import SiteSchema
 from app.sites.graphql_types import (
     AddDomainInput,
@@ -42,6 +43,7 @@ from app.sites.graphql_types import (
     ScrapedDataType,
     SiteAnalyticsType,
     SubdomainInfoType,
+    SiteVersionType,
     UpdateSiteDataInput,
 )
 from app.sites.models import (
@@ -56,8 +58,10 @@ from app.sites.models import (
     OutreachEmail,
     PageView,
     ScrapedData,
+    SiteDeletionToken,
     SiteDraft,
     SiteStatus,
+    SiteVersion,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,10 +71,20 @@ logger = logging.getLogger(__name__)
 # Free plan helpers
 # ---------------------------------------------------------------------------
 
+_SUB_CHECK_TTL = 600  # 10 minutes
+
+
 async def _has_active_subscription(db, user: User) -> bool:
-    """Check if user has an active (or trialing) subscription."""
+    """Check if user has an active (or trialing) subscription (cached)."""
+    cache_key = f"sub_active:{user.id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     sub = await get_active_subscription(db, user.id)
-    return sub is not None
+    has_sub = sub is not None
+    await cache.set(cache_key, has_sub, ttl=_SUB_CHECK_TTL)
+    return has_sub
 
 
 async def _require_subscription(db, user: User, action: str = "This action") -> None:
@@ -315,14 +329,18 @@ class SiteQuery:
 
     @strawberry.field
     async def my_sites(self, info: Info) -> list[GeneratedSiteType]:
-        """Get all sites belonging to the current user (via lead.created_by)."""
+        """Get all sites belonging to the current user (via lead.created_by).
+        Excludes soft-deleted sites."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .join(Lead, GeneratedSite.lead_id == Lead.id)
-                .where(Lead.created_by == str(user.id))
+                .where(
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                )
                 .options(selectinload(GeneratedSite.lead))
                 .order_by(GeneratedSite.created_at.desc())
             )
@@ -334,7 +352,7 @@ class SiteQuery:
         """Get a single site owned by the current user (for editing)."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .join(Lead, GeneratedSite.lead_id == Lead.id)
@@ -363,7 +381,7 @@ class SiteQuery:
         user = _require_user(await _get_user_from_info(info))
         days = min(days, 90)
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Verify ownership (superadmins can access any site)
             query = (
                 select(GeneratedSite)
@@ -484,18 +502,58 @@ class SiteQuery:
 
     @strawberry.field
     async def my_domains(self, info: Info) -> list[CustomDomainType]:
-        """Get all custom domains belonging to the current user."""
+        """Get all domains belonging to the current user.
+
+        Includes both:
+        - Custom domains from the custom_domains table
+        - Auto-generated subdomain entries from the user's sites
+        """
+        from app.config import settings as _settings
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
+            # 1. Custom domains
             result = await db.execute(
                 select(CustomDomain)
                 .where(CustomDomain.user_id == str(user.id))
                 .options(selectinload(CustomDomain.site).selectinload(GeneratedSite.lead))
                 .order_by(CustomDomain.created_at.desc())
             )
-            domains = result.scalars().all()
-            return [_domain_to_gql(d) for d in domains]
+            domains = [_domain_to_gql(d) for d in result.scalars().all()]
+
+            # 2. Subdomain entries from the user's sites
+            # These are platform subdomains (e.g. acme.qvickosite.com) that
+            # are always active and don't need DNS verification.
+            site_result = await db.execute(
+                select(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                    GeneratedSite.subdomain.isnot(None),
+                )
+                .options(selectinload(GeneratedSite.lead))
+            )
+            # Collect custom-domain domains already in the list to avoid dupes
+            custom_domain_set = {d.domain for d in domains}
+            for site in site_result.scalars().all():
+                full = f"{site.subdomain}.{_settings.BASE_DOMAIN}"
+                if full in custom_domain_set:
+                    continue
+                domains.append(CustomDomainType(
+                    id=f"sub-{site.id}",
+                    domain=full,
+                    site_id=site.id,
+                    status="ACTIVE",
+                    site_subdomain=site.subdomain,
+                    site_business_name=site.lead.business_name if site.lead else None,
+                    verified_at=site.created_at,
+                    created_at=site.created_at,
+                    updated_at=site.updated_at,
+                    vercel_verification=None,
+                ))
+
+            return domains
 
     @strawberry.field
     async def search_domain(self, info: Info, domain: str) -> DomainSearchResult:
@@ -521,7 +579,7 @@ class SiteQuery:
         """Get all domains purchased by the current user."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(DomainPurchase)
                 .where(DomainPurchase.user_id == str(user.id))
@@ -550,7 +608,7 @@ class SiteQuery:
         user = _require_user(await _get_user_from_info(info))
         from app.config import settings as _settings
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .join(Lead, GeneratedSite.lead_id == Lead.id)
@@ -574,7 +632,7 @@ class SiteQuery:
     async def lead(self, info: Info, id: str) -> LeadType | None:
         """Get a single lead by ID (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == id)
@@ -595,7 +653,7 @@ class SiteQuery:
         f = filter or LeadFilterInput()
         page_size = min(f.page_size, 100)
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             query = select(Lead).options(
                 selectinload(Lead.scraped_data),
                 selectinload(Lead.generated_site),
@@ -647,7 +705,7 @@ class SiteQuery:
         if cached:
             return DashboardStatsType(**cached)
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Lead counts by status (single GROUP BY instead of N queries)
             result = await db.execute(
                 select(Lead.status, func.count()).group_by(Lead.status)
@@ -715,11 +773,12 @@ class SiteQuery:
         if cached:
             return GeneratedSiteType(**cached)
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite).where(
                     GeneratedSite.id == id,
                     GeneratedSite.status == SiteStatus.PUBLISHED,
+                    GeneratedSite.deleted_at.is_(None),
                 )
             )
             site = result.scalar_one_or_none()
@@ -760,7 +819,7 @@ class SiteQuery:
         """List inbound emails (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             f = filter or InboundEmailFilterInput()
             page_size = min(f.page_size, 100)
 
@@ -812,7 +871,7 @@ class SiteQuery:
         """Get single inbound email (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(InboundEmail).where(InboundEmail.id == id)
             )
@@ -826,6 +885,46 @@ class SiteQuery:
                 await db.commit()
 
             return _inbound_to_gql(email)
+
+    @strawberry.field
+    async def site_versions(self, info: Info, site_id: str) -> list[SiteVersionType]:
+        """Get version history for a site (newest first)."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            # Verify ownership
+            site_result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = site_result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("Access denied")
+
+            result = await db.execute(
+                select(SiteVersion)
+                .where(SiteVersion.site_id == site_id)
+                .order_by(SiteVersion.version_number.desc())
+                .limit(20)
+            )
+            versions = result.scalars().all()
+
+        return [
+            SiteVersionType(
+                id=v.id,
+                site_id=v.site_id,
+                version_number=v.version_number,
+                site_data=v.site_data,
+                label=v.label,
+                created_at=v.created_at,
+            )
+            for v in versions
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +944,7 @@ class SiteMutation:
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Check for duplicate
             existing = await db.execute(
                 select(Lead).where(Lead.website_url == url)
@@ -901,7 +1000,7 @@ class SiteMutation:
         """Re-run the scrape+generate pipeline for a lead (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(select(Lead).where(Lead.id == lead_id))
             lead = result.scalar_one_or_none()
             if not lead:
@@ -915,7 +1014,7 @@ class SiteMutation:
         """Send outreach email for a lead (superadmin only). Lead must have a generated site."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == lead_id)
@@ -941,7 +1040,7 @@ class SiteMutation:
         """Update a lead's status (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == lead_id)
@@ -969,7 +1068,7 @@ class SiteMutation:
         """Delete a lead and all related data (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == lead_id)
@@ -982,11 +1081,18 @@ class SiteMutation:
             # Invalidate site cache if exists
             if lead.generated_site:
                 await cache.delete(f"site:{lead.generated_site.id}")
+                await cache.delete(f"site:data:{lead.generated_site.id}")
+                await cache.delete(f"site:meta:{lead.generated_site.id}")
+                if lead.generated_site.subdomain:
+                    await cache.delete(f"resolve:sub:{lead.generated_site.subdomain}")
+                if lead.generated_site.custom_domain:
+                    await cache.delete(f"resolve:dom:{lead.generated_site.custom_domain}")
 
             await db.delete(lead)
             await db.commit()
 
             await cache.delete("admin:dashboard_stats")
+            await cache.delete("sites:published")
             return True
 
     @strawberry.mutation
@@ -994,7 +1100,7 @@ class SiteMutation:
         """Update a site's JSON data (superadmin or site owner)."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == input.site_id)
@@ -1022,6 +1128,12 @@ class SiteMutation:
 
             # Invalidate cache
             await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
 
             return _site_to_gql(site, site.lead)
 
@@ -1034,7 +1146,7 @@ class SiteMutation:
         """Auto-save editor draft. No cache invalidation — draft only."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == input.site_id)
@@ -1078,7 +1190,7 @@ class SiteMutation:
         """Load the current draft for a site, if one exists."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == site_id)
@@ -1110,7 +1222,7 @@ class SiteMutation:
         """Publish site data: save to site_data, delete draft, invalidate all caches."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == input.site_id)
@@ -1129,6 +1241,34 @@ class SiteMutation:
                 SiteSchema.model_validate(input.site_data)
             except ValidationError as e:
                 raise ValueError(f"Invalid site data: {e}")
+
+            # Create version snapshot before overwriting
+            version_count_result = await db.execute(
+                select(func.coalesce(func.max(SiteVersion.version_number), 0)).where(
+                    SiteVersion.site_id == input.site_id
+                )
+            )
+            next_version = version_count_result.scalar_one() + 1
+            version = SiteVersion(
+                site_id=input.site_id,
+                version_number=next_version,
+                site_data=input.site_data,
+            )
+            db.add(version)
+
+            # Keep only last 20 versions per site
+            old_versions_result = await db.execute(
+                select(SiteVersion.id)
+                .where(SiteVersion.site_id == input.site_id)
+                .order_by(SiteVersion.version_number.desc())
+                .offset(20)
+            )
+            old_ids = [row[0] for row in old_versions_result.all()]
+            if old_ids:
+                from sqlalchemy import delete
+                await db.execute(
+                    delete(SiteVersion).where(SiteVersion.id.in_(old_ids))
+                )
 
             # Save to published site_data
             site.site_data = input.site_data
@@ -1149,8 +1289,11 @@ class SiteMutation:
             await cache.delete(f"site:{site.id}")
             await cache.delete(f"site:data:{site.id}")
             await cache.delete(f"site:meta:{site.id}")
+            await cache.delete("sites:published")
             if site.subdomain:
                 await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
 
             # Trigger viewer ISR revalidation
             asyncio.ensure_future(_revalidate_viewer(site.id, site.subdomain))
@@ -1165,7 +1308,7 @@ class SiteMutation:
         """Discard draft and revert to published version."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == site_id)
@@ -1194,7 +1337,7 @@ class SiteMutation:
         """Publish a site. Requires active subscription (or superadmin)."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Require subscription for non-superusers
             await _require_subscription(db, user, "Publicering av hemsida")
 
@@ -1220,25 +1363,43 @@ class SiteMutation:
             await db.refresh(site)
 
             await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            await cache.delete("sites:published")
             return _site_to_gql(site, site.lead)
 
     @strawberry.mutation
     async def track_site_view(self, info: Info, site_id: str) -> bool:
-        """Increment view count for a site (public)."""
-        async with async_session() as db:
-            result = await db.execute(
-                select(GeneratedSite).where(GeneratedSite.id == site_id)
-            )
-            site = result.scalar_one_or_none()
-            if not site:
-                return False
+        """Increment view count for a site (public).
 
-            site.views += 1
-            await db.commit()
+        Uses a cache counter to buffer increments and flushes to DB every
+        _VIEW_FLUSH_THRESHOLD views, avoiding a DB write per page view.
+        """
+        _VIEW_FLUSH_THRESHOLD = 10
+        counter_key = f"site:views_buffer:{site_id}"
 
-            # Invalidate cache so views update
+        # Increment counter in cache
+        current = await cache.get(counter_key)
+        count = (int(current) if current else 0) + 1
+        await cache.set(counter_key, count, ttl=300)
+
+        if count >= _VIEW_FLUSH_THRESHOLD:
+            # Flush buffered views to DB
+            async with get_db_session() as db:
+                result = await db.execute(
+                    select(GeneratedSite).where(GeneratedSite.id == site_id)
+                )
+                site = result.scalar_one_or_none()
+                if not site:
+                    return False
+
+                site.views += count
+                await db.commit()
+
+            await cache.delete(counter_key)
             await cache.delete(f"site:{site_id}")
-            return True
+
+        return True
 
     @strawberry.mutation
     async def mark_email_read(
@@ -1247,7 +1408,7 @@ class SiteMutation:
         """Mark inbound email as read/unread (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(InboundEmail).where(InboundEmail.id == id)
             )
@@ -1266,7 +1427,7 @@ class SiteMutation:
         """Archive/unarchive inbound email (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(InboundEmail).where(InboundEmail.id == id)
             )
@@ -1289,7 +1450,7 @@ class SiteMutation:
         """Update a site's subdomain and/or custom domain. Logs changes to settings audit."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(GeneratedSite)
                 .where(GeneratedSite.id == site_id)
@@ -1319,6 +1480,21 @@ class SiteMutation:
                 )
                 await db.commit()
                 await cache.delete(f"site:{site.id}")
+                await cache.delete(f"site:data:{site.id}")
+                await cache.delete(f"site:meta:{site.id}")
+                await cache.delete("sites:published")
+                # Invalidate old and new resolve keys
+                for field, (old_val, new_val) in changes.items():
+                    if field == "subdomain":
+                        if old_val:
+                            await cache.delete(f"resolve:sub:{old_val}")
+                        if new_val:
+                            await cache.delete(f"resolve:sub:{new_val}")
+                    elif field == "custom_domain":
+                        if old_val:
+                            await cache.delete(f"resolve:dom:{old_val}")
+                        if new_val:
+                            await cache.delete(f"resolve:dom:{new_val}")
 
             return _site_to_gql(site, site.lead)
 
@@ -1342,7 +1518,7 @@ class SiteMutation:
         if not domain or "." not in domain:
             raise ValueError("Invalid domain format")
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Free plan: no custom domains
             await _require_subscription(db, user, "Egen domän")
 
@@ -1408,7 +1584,7 @@ class SiteMutation:
         """Remove a custom domain. Also removes it from Vercel."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(CustomDomain).where(
                     CustomDomain.id == domain_id,
@@ -1437,7 +1613,10 @@ class SiteMutation:
                 if site and site.custom_domain == domain_name:
                     site.custom_domain = None
                     await cache.delete(f"site:{site.id}")
+                    await cache.delete(f"site:data:{site.id}")
+                    await cache.delete(f"site:meta:{site.id}")
 
+            await cache.delete(f"resolve:dom:{domain_name}")
             await db.delete(domain)
             await db.commit()
 
@@ -1455,7 +1634,7 @@ class SiteMutation:
         """Assign a custom domain to a site."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Verify domain ownership
             domain_result = await db.execute(
                 select(CustomDomain).where(
@@ -1513,7 +1692,7 @@ class SiteMutation:
         """
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(CustomDomain).where(
                     CustomDomain.id == domain_id,
@@ -1572,7 +1751,7 @@ class SiteMutation:
         if subdomain in BLACKLISTED_SUBDOMAINS:
             raise ValueError(f"Subdomain '{subdomain}' is reserved and cannot be used")
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             # Verify site ownership
             result = await db.execute(
                 select(GeneratedSite)
@@ -1613,6 +1792,11 @@ class SiteMutation:
             # Invalidate cache
             await cache.delete(f"site:{site.id}")
             await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            await cache.delete("sites:published")
+            if old_subdomain:
+                await cache.delete(f"resolve:sub:{old_subdomain}")
+            await cache.delete(f"resolve:sub:{subdomain}")
 
             return _site_to_gql(site, site.lead)
 
@@ -1628,7 +1812,7 @@ class SiteMutation:
         """
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(DomainPurchase).where(
                     DomainPurchase.id == domain_id,
@@ -1666,7 +1850,7 @@ class SiteMutation:
         """Re-lock a domain to prevent unauthorized transfers."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(DomainPurchase).where(
                     DomainPurchase.id == domain_id,
@@ -1701,7 +1885,7 @@ class SiteMutation:
         """Enable or disable auto-renewal for a purchased domain."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(DomainPurchase).where(
                     DomainPurchase.id == domain_id,
@@ -1733,7 +1917,7 @@ class SiteMutation:
         """Manually renew a purchased domain. Charges the user's default payment method."""
         user = _require_user(await _get_user_from_info(info))
 
-        async with async_session() as db:
+        async with get_db_session() as db:
             result = await db.execute(
                 select(DomainPurchase).where(
                     DomainPurchase.id == domain_id,
@@ -1804,6 +1988,370 @@ class SiteMutation:
             )
 
 
+    # -------------------------------------------------------------------
+    # Soft-delete & Pause
+    # -------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def request_site_deletion(self, info: Info, site_id: str, slug: str) -> bool:
+        """Request site deletion. Requires matching slug. Sends confirmation email."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    GeneratedSite.id == site_id,
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                )
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Hemsida hittades inte")
+
+            # Verify slug matches
+            expected_slug = site.subdomain or site.id[:8]
+            if slug.strip().lower() != expected_slug.lower():
+                raise ValueError("Slug matchar inte. Skriv korrekt slug för att bekräfta radering.")
+
+            # Generate deletion token
+            import secrets
+            from app.auth.service import _hash_token
+            from datetime import timedelta
+
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = _hash_token(raw_token)
+            expires = datetime.now(timezone.utc) + timedelta(hours=24)
+
+            deletion_token = SiteDeletionToken(
+                site_id=site_id,
+                user_id=str(user.id),
+                token_hash=token_hash,
+                expires_at=expires,
+            )
+            db.add(deletion_token)
+            await db.commit()
+
+            # Send confirmation email
+            try:
+                from app.email.service import _send_via_resend
+                from app.email.templates import build_site_deletion_email
+                site_name = site.lead.business_name if site.lead else "Din hemsida"
+                html = build_site_deletion_email(site_name, raw_token)
+                await _send_via_resend(
+                    to=user.email,
+                    subject=f"Bekräfta radering av {site_name}",
+                    html=html,
+                    text=f"Bekräfta radering av {site_name}. Klicka på länken i HTML-versionen av detta e-postmeddelande.",
+                )
+            except Exception:
+                logger.warning("Failed to send deletion confirmation email to %s", user.email)
+
+            return True
+
+    @strawberry.mutation
+    async def confirm_site_deletion(self, info: Info, token: str) -> bool:
+        """Confirm site deletion via email token. Performs soft-delete."""
+        user = _require_user(await _get_user_from_info(info))
+
+        from app.auth.service import _hash_token
+
+        token_hash = _hash_token(token)
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(SiteDeletionToken).where(
+                    SiteDeletionToken.token_hash == token_hash,
+                    SiteDeletionToken.user_id == str(user.id),
+                    SiteDeletionToken.used_at.is_(None),
+                )
+            )
+            deletion_token = result.scalar_one_or_none()
+            if not deletion_token:
+                raise ValueError("Ogiltig eller redan använd raderingstoken")
+
+            if deletion_token.expires_at < datetime.now(timezone.utc):
+                raise ValueError("Raderingstoken har gått ut. Begär en ny radering.")
+
+            # Mark token as used
+            deletion_token.used_at = datetime.now(timezone.utc)
+
+            # Soft-delete the site
+            site_result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == deletion_token.site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = site_result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Hemsida hittades inte")
+
+            site.deleted_at = datetime.now(timezone.utc)
+            site.previous_status = site.status.value
+            site.status = SiteStatus.ARCHIVED
+
+            # Remove subdomain and custom domain from Vercel
+            old_subdomain = site.subdomain
+            old_custom_domain = site.custom_domain
+
+            if old_subdomain:
+                try:
+                    from app.sites.vercel import remove_domain as vercel_remove
+                    from app.config import settings as _settings
+                    await vercel_remove(f"{old_subdomain}.{_settings.BASE_DOMAIN}")
+                except Exception:
+                    logger.warning("Failed to remove subdomain %s from Vercel", old_subdomain)
+                site.subdomain = None
+
+            if old_custom_domain:
+                try:
+                    from app.sites.vercel import remove_domain as vercel_remove
+                    await vercel_remove(old_custom_domain)
+                except Exception:
+                    logger.warning("Failed to remove custom domain %s from Vercel", old_custom_domain)
+                site.custom_domain = None
+
+            # Unlink custom domains from this site
+            domain_result = await db.execute(
+                select(CustomDomain).where(CustomDomain.site_id == site.id)
+            )
+            for domain in domain_result.scalars().all():
+                domain.site_id = None
+
+            await db.commit()
+
+            # Invalidate caches
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            await cache.delete("sites:published")
+            if old_subdomain:
+                await cache.delete(f"resolve:sub:{old_subdomain}")
+            if old_custom_domain:
+                await cache.delete(f"resolve:dom:{old_custom_domain}")
+
+            return True
+
+    @strawberry.mutation
+    async def pause_site(self, info: Info, site_id: str) -> GeneratedSiteType:
+        """Pause a site. Removes it from public access but keeps data."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    GeneratedSite.id == site_id,
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                )
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Hemsida hittades inte")
+
+            if site.status == SiteStatus.PAUSED:
+                raise ValueError("Hemsidan är redan pausad")
+
+            site.previous_status = site.status.value
+            site.status = SiteStatus.PAUSED
+            site.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(site)
+
+            # Invalidate caches
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
+
+            return _site_to_gql(site, site.lead)
+
+    @strawberry.mutation
+    async def unpause_site(self, info: Info, site_id: str) -> GeneratedSiteType:
+        """Unpause a site. Restores previous status."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    GeneratedSite.id == site_id,
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                )
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Hemsida hittades inte")
+
+            if site.status != SiteStatus.PAUSED:
+                raise ValueError("Hemsidan är inte pausad")
+
+            prev = site.previous_status
+            site.status = SiteStatus(prev) if prev and prev != "PAUSED" else SiteStatus.PUBLISHED
+            site.previous_status = None
+            site.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(site)
+
+            # Invalidate caches
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
+
+            return _site_to_gql(site, site.lead)
+
+    @strawberry.mutation
+    async def update_site_settings(
+        self, info: Info, site_id: str, settings: JSON
+    ) -> GeneratedSiteType:
+        """Update site settings (meta/SEO, language, business email).
+
+        Accepts a JSON object with keys: meta, business, seo.
+        Only provided keys are merged into site_data.
+        """
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    GeneratedSite.id == site_id,
+                    Lead.created_by == str(user.id),
+                    GeneratedSite.deleted_at.is_(None),
+                )
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Hemsida hittades inte")
+
+            # Merge settings into site_data
+            site_data = dict(site.site_data) if site.site_data else {}
+            allowed_keys = {"meta", "business", "seo"}
+            for key in allowed_keys:
+                if key in settings:
+                    if isinstance(settings[key], dict):
+                        existing = site_data.get(key, {})
+                        if isinstance(existing, dict):
+                            existing.update(settings[key])
+                            site_data[key] = existing
+                        else:
+                            site_data[key] = settings[key]
+                    else:
+                        site_data[key] = settings[key]
+
+            # Validate merged data
+            try:
+                SiteSchema.model_validate(site_data)
+            except ValidationError as e:
+                raise ValueError(f"Invalid site data: {e}")
+
+            site.site_data = site_data
+            site.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(site)
+
+            # Invalidate caches
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
+
+            return _site_to_gql(site, site.lead)
+
+    @strawberry.mutation
+    async def restore_site_version(
+        self, info: Info, site_id: str, version_id: str
+    ) -> GeneratedSiteType:
+        """Restore a site to a previous version."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            # Verify ownership
+            site_result = await db.execute(
+                select(GeneratedSite)
+                .where(GeneratedSite.id == site_id)
+                .options(selectinload(GeneratedSite.lead))
+            )
+            site = site_result.scalar_one_or_none()
+            if not site:
+                raise ValueError("Site not found")
+
+            is_owner = site.lead and site.lead.created_by == str(user.id)
+            if not user.is_superuser and not is_owner:
+                raise PermissionError("Access denied")
+
+            # Get the version
+            version_result = await db.execute(
+                select(SiteVersion).where(
+                    SiteVersion.id == version_id,
+                    SiteVersion.site_id == site_id,
+                )
+            )
+            version = version_result.scalar_one_or_none()
+            if not version:
+                raise ValueError("Version not found")
+
+            # Validate restored data
+            try:
+                SiteSchema.model_validate(version.site_data)
+            except ValidationError as e:
+                raise ValueError(f"Invalid version data: {e}")
+
+            # Create a new version snapshot of current state before restoring
+            max_result = await db.execute(
+                select(func.coalesce(func.max(SiteVersion.version_number), 0)).where(
+                    SiteVersion.site_id == site_id
+                )
+            )
+            next_num = max_result.scalar_one() + 1
+            snapshot = SiteVersion(
+                site_id=site_id,
+                version_number=next_num,
+                site_data=version.site_data,
+                label=f"Återställd från v{version.version_number}",
+            )
+            db.add(snapshot)
+
+            site.site_data = version.site_data
+            site.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(site)
+
+            # Invalidate caches
+            await cache.delete(f"site:{site.id}")
+            await cache.delete(f"site:data:{site.id}")
+            await cache.delete(f"site:meta:{site.id}")
+            if site.subdomain:
+                await cache.delete(f"resolve:sub:{site.subdomain}")
+            if site.custom_domain:
+                await cache.delete(f"resolve:dom:{site.custom_domain}")
+
+            asyncio.ensure_future(_revalidate_viewer(site.id, site.subdomain))
+
+            return _site_to_gql(site, site.lead)
+
+
 # ---------------------------------------------------------------------------
 # Background pipeline runner
 # ---------------------------------------------------------------------------
@@ -1812,7 +2360,7 @@ async def _run_pipeline_bg(lead_id: str) -> None:
     """Run the scraper+generator pipeline in the background."""
     from app.scraper.pipeline import run_pipeline
     try:
-        async with async_session() as db:
+        async with get_db_session() as db:
             await run_pipeline(db, lead_id)
             await db.commit()
     except Exception:

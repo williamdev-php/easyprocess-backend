@@ -59,6 +59,30 @@ def _strip_unknown_keys(site_data: dict) -> None:
             del site_data[key]
 
 
+def _sanitize_ai_output(site_data: dict) -> None:
+    """Fix common AI generation issues before Pydantic validation.
+
+    - Remove gallery images with null/empty URLs
+    - Replace null strings with empty strings for required string fields
+    """
+    # Remove gallery images missing a URL
+    gallery = site_data.get("gallery")
+    if isinstance(gallery, dict) and "images" in gallery:
+        gallery["images"] = [
+            img for img in gallery["images"]
+            if isinstance(img, dict) and img.get("url")
+        ]
+
+    # Fix null strings in blocks that have required title/subtitle fields
+    for block_key in ("stats", "testimonials", "faq", "features", "services",
+                      "gallery", "process", "team", "about"):
+        block = site_data.get(block_key)
+        if isinstance(block, dict):
+            for str_field in ("title", "subtitle"):
+                if str_field in block and block[str_field] is None:
+                    block[str_field] = ""
+
+
 async def generate_site(
     business_name: str,
     industry: str | None,
@@ -115,6 +139,7 @@ async def generate_site(
             # Parse and validate
             site_data = json.loads(raw_json)
             _strip_unknown_keys(site_data)
+            _sanitize_ai_output(site_data)
             site_schema = SiteSchema(**site_data)
 
             cost_per_m = _COST_PER_1M.get(model, 1.0)

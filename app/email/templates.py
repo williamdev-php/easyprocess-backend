@@ -567,3 +567,42 @@ Ni kan när som helst ändra betalningsmetod eller se er fakturering i kontrollp
 — Qvicko"""
 
     return subject, html_body, plain_text
+
+
+# ---------------------------------------------------------------------------
+# Site deletion confirmation email
+# ---------------------------------------------------------------------------
+
+def build_site_deletion_email(
+    site_name: str,
+    token: str,
+) -> str:
+    """Build HTML email for site deletion confirmation."""
+    safe_name = html_escape(site_name)
+    confirm_url = f"https://qvicko.com/sv/dashboard/pages?confirm_delete={token}"
+    safe_url = html_escape(confirm_url)
+
+    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Bekr&auml;fta radering</h2>
+
+          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
+            Du har beg&auml;rt att radera hemsidan <strong>{safe_name}</strong>.
+          </p>
+
+          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
+            Denna &aring;tg&auml;rd kan inte &aring;ngras. Hemsidan kommer att d&ouml;ljas fr&aring;n alla
+            bes&ouml;kare och alla kopplade dom&auml;ner kommer att tas bort.
+            Klicka p&aring; knappen nedan f&ouml;r att bekr&auml;fta raderingen.
+            L&auml;nken &auml;r giltig i 24&nbsp;timmar.
+          </p>
+
+{_cta_button(safe_url, "Bekr&auml;fta radering")}
+
+          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
+            Om du inte beg&auml;rde denna radering kan du ignorera detta meddelande.
+          </p>
+
+          <p style="color:#7A9BAD; font-size:12px; margin:16px 0 0; word-break:break-all;">
+            Eller kopiera denna l&auml;nk: {safe_url}
+          </p>"""
+
+    return _wrap_layout(inner)

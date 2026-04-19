@@ -58,7 +58,8 @@ async def resolve_site(
         result = await db.execute(
             select(GeneratedSite).where(
                 GeneratedSite.subdomain == subdomain,
-                GeneratedSite.status != SiteStatus.ARCHIVED,
+                GeneratedSite.status.notin_([SiteStatus.ARCHIVED, SiteStatus.PAUSED]),
+                GeneratedSite.deleted_at.is_(None),
             )
         )
         site = result.scalar_one_or_none()
@@ -84,7 +85,8 @@ async def resolve_site(
             result = await db.execute(
                 select(GeneratedSite).where(
                     GeneratedSite.id == cd.site_id,
-                    GeneratedSite.status != SiteStatus.ARCHIVED,
+                    GeneratedSite.status.notin_([SiteStatus.ARCHIVED, SiteStatus.PAUSED]),
+                    GeneratedSite.deleted_at.is_(None),
                 )
             )
             site = result.scalar_one_or_none()
@@ -94,7 +96,8 @@ async def resolve_site(
             result = await db.execute(
                 select(GeneratedSite).where(
                     GeneratedSite.custom_domain == domain,
-                    GeneratedSite.status != SiteStatus.ARCHIVED,
+                    GeneratedSite.status.notin_([SiteStatus.ARCHIVED, SiteStatus.PAUSED]),
+                    GeneratedSite.deleted_at.is_(None),
                 )
             )
             site = result.scalar_one_or_none()
@@ -102,18 +105,25 @@ async def resolve_site(
     if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    # If resolved via subdomain, check if there's an active custom domain → redirect
+    # If resolved via subdomain, check if there's an active custom domain → redirect.
+    # Skip subdomain-based domains (*.BASE_DOMAIN) to avoid redirect loops.
     redirect_to: str | None = None
     if subdomain and site.id:
+        from app.config import settings as _settings
+        base_suffix = f".{_settings.BASE_DOMAIN}"
+
         cd_result = await db.execute(
             select(CustomDomain.domain).where(
                 CustomDomain.site_id == site.id,
                 CustomDomain.status == DomainStatus.ACTIVE,
             )
         )
-        active_domain = cd_result.scalar_one_or_none()
-        if active_domain:
-            redirect_to = f"https://{active_domain}"
+        active_domains = cd_result.scalars().all()
+        # Only redirect to a real custom domain, not a platform subdomain
+        for d in active_domains:
+            if not d.endswith(base_suffix):
+                redirect_to = f"https://{d}"
+                break
 
     response = {
         "id": site.id,
@@ -185,7 +195,8 @@ async def get_claim_info(token: str, db: AsyncSession = Depends(get_db)) -> dict
         select(GeneratedSite)
         .where(
             GeneratedSite.claim_token == token,
-            GeneratedSite.status != SiteStatus.ARCHIVED,
+            GeneratedSite.status.notin_([SiteStatus.ARCHIVED, SiteStatus.PAUSED]),
+                GeneratedSite.deleted_at.is_(None),
         )
         .options(selectinload(GeneratedSite.lead))
     )
@@ -227,7 +238,8 @@ async def claim_site(
         select(GeneratedSite)
         .where(
             GeneratedSite.claim_token == token,
-            GeneratedSite.status != SiteStatus.ARCHIVED,
+            GeneratedSite.status.notin_([SiteStatus.ARCHIVED, SiteStatus.PAUSED]),
+                GeneratedSite.deleted_at.is_(None),
         )
         .options(selectinload(GeneratedSite.lead))
     )
@@ -245,11 +257,25 @@ async def claim_site(
 
     site.claimed_by = str(current_user.id)
     site.claim_token = None  # Invalidate token after claim
+
+    # Transfer any custom domains linked to this site to the new owner
+    from sqlalchemy import select as _select
+    cd_result = await db.execute(
+        _select(CustomDomain).where(CustomDomain.site_id == site.id)
+    )
+    for cd in cd_result.scalars().all():
+        if cd.user_id != str(current_user.id):
+            cd.user_id = str(current_user.id)
+
     await db.commit()
 
     # Invalidate caches
+    await cache.delete(f"site:{site.id}")
     await cache.delete(f"site:data:{site.id}")
+    await cache.delete(f"site:meta:{site.id}")
     await cache.delete("admin:dashboard_stats")
+    if site.subdomain:
+        await cache.delete(f"resolve:sub:{site.subdomain}")
 
     return {"ok": True, "site_id": site.id}
 

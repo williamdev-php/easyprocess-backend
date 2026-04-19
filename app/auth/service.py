@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -9,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth.models import AuditEventType, AuditLog, Session, SettingsAuditLog, User
+from app.cache import cache
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Cache TTLs (seconds)
+_USER_CACHE_TTL = 300  # 5 minutes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -118,17 +125,133 @@ async def revoke_all_user_sessions(db: AsyncSession, user_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# User queries
+# User cache helpers
 # ---------------------------------------------------------------------------
+
+def _user_cache_key(user_id: str) -> str:
+    return f"user:{user_id}"
+
+
+def _email_cache_key(email: str) -> str:
+    return f"user_email:{email.lower()}"
+
+
+def _serialize_user(user: User) -> dict:
+    """Serialize user to a dict for caching (only fields needed for auth checks)."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "password_hash": user.password_hash,
+        "full_name": user.full_name,
+        "company_name": user.company_name,
+        "org_number": user.org_number,
+        "phone": user.phone,
+        "avatar_url": user.avatar_url,
+        "locale": user.locale,
+        "role": user.role.value if user.role else "USER",
+        "is_superuser": user.is_superuser,
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+        "two_factor_enabled": user.two_factor_enabled,
+        "failed_login_attempts": user.failed_login_attempts,
+        "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "password_changed_at": user.password_changed_at.isoformat() if user.password_changed_at else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        "stripe_customer_id": user.stripe_customer_id,
+        "subscription_id": user.subscription_id,
+        "billing_street": user.billing_street,
+        "billing_city": user.billing_city,
+        "billing_zip": user.billing_zip,
+        "billing_country": user.billing_country,
+    }
+
+
+async def invalidate_user_cache(user_id: str, email: str | None = None) -> None:
+    """Invalidate all cached data for a user."""
+    await cache.delete(_user_cache_key(user_id))
+    if email:
+        await cache.delete(_email_cache_key(email))
+
+
+# ---------------------------------------------------------------------------
+# User queries (with caching)
+# ---------------------------------------------------------------------------
+
+def _user_from_cache(data: dict) -> User:
+    """Reconstruct a transient (detached) User instance from cached dict (read-only)."""
+    from app.auth.models import UserRole
+
+    return User(
+        id=data["id"],
+        email=data["email"],
+        password_hash=data.get("password_hash"),
+        full_name=data.get("full_name", ""),
+        company_name=data.get("company_name"),
+        org_number=data.get("org_number"),
+        phone=data.get("phone"),
+        avatar_url=data.get("avatar_url"),
+        locale=data.get("locale", "sv"),
+        role=UserRole(data.get("role", "USER")),
+        is_superuser=data.get("is_superuser", False),
+        is_active=data.get("is_active", True),
+        is_verified=data.get("is_verified", False),
+        two_factor_enabled=data.get("two_factor_enabled", False),
+        failed_login_attempts=data.get("failed_login_attempts", 0),
+        locked_until=(
+            datetime.fromisoformat(data["locked_until"]) if data.get("locked_until") else None
+        ),
+        last_login_at=(
+            datetime.fromisoformat(data["last_login_at"]) if data.get("last_login_at") else None
+        ),
+        password_changed_at=(
+            datetime.fromisoformat(data["password_changed_at"]) if data.get("password_changed_at") else None
+        ),
+        created_at=(
+            datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc)
+        ),
+        updated_at=(
+            datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc)
+        ),
+        stripe_customer_id=data.get("stripe_customer_id"),
+        subscription_id=data.get("subscription_id"),
+        billing_street=data.get("billing_street"),
+        billing_city=data.get("billing_city"),
+        billing_zip=data.get("billing_zip"),
+        billing_country=data.get("billing_country"),
+    )
+
+
+async def _cache_user(user: User) -> None:
+    """Cache user data by both ID and email."""
+    await cache.set(_user_cache_key(user.id), _serialize_user(user), ttl=_USER_CACHE_TTL)
+    await cache.set(_email_cache_key(user.email), user.id, ttl=_USER_CACHE_TTL)
+
+
+async def get_user_by_id_cached(user_id: str) -> User | None:
+    """Return a cached (detached) User for read-only use (e.g. auth dependencies).
+    Skips DB entirely on cache hit."""
+    cached = await cache.get(_user_cache_key(user_id))
+    if cached and isinstance(cached, dict):
+        return _user_from_cache(cached)
+    return None
+
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user:
+        await _cache_user(user)
+    return user
 
 
 async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
     result = await db.execute(select(User).where(User.id == user_id))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user:
+        await _cache_user(user)
+    return user
 
 
 async def create_user(

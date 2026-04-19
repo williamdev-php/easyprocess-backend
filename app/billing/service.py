@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 
 import stripe
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -308,9 +308,9 @@ async def get_user_payments(
 ) -> tuple[list[Payment], int]:
     """Get paginated payment history for a user."""
     count_result = await db.execute(
-        select(Payment).where(Payment.user_id == user_id)
+        select(func.count()).select_from(Payment).where(Payment.user_id == user_id)
     )
-    total = len(count_result.all())
+    total = count_result.scalar() or 0
 
     result = await db.execute(
         select(Payment)
