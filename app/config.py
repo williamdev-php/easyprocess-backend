@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # Domain sales markup (percentage added on top of Vercel's domain price)
     DOMAIN_MARKUP_PERCENT: int = 30  # 30% markup by default
 
+    # Smartlead (cold outreach)
+    SMARTLEAD_API_KEY: str = ""
+    SMARTLEAD_DAILY_SEND_LIMIT: int = 50
+    SMARTLEAD_WARMUP_ENABLED: bool = True
+
     # Stripe
     STRIPE_SECRET_KEY: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
@@ -114,6 +119,7 @@ class Settings(BaseSettings):
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
             "STRIPE_SECRET_KEY": self.STRIPE_SECRET_KEY,
             "STRIPE_WEBHOOK_SECRET": self.STRIPE_WEBHOOK_SECRET,
+            "SMARTLEAD_API_KEY": self.SMARTLEAD_API_KEY,
         }
         missing = [k for k, v in required.items() if not v]
         if missing:

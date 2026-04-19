@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import random
 import time
 
 import httpx
@@ -45,8 +46,13 @@ _COST_PER_1M: dict[str, float] = {
 }
 
 
+# Number of available style variants (0 through N-1). Increase this when
+# you add more variant layouts in the viewer section components.
+# 0 = Original, 1 = Modern Cards, 2 = Clean & Minimal, 3 = Bold & Filled
+TOTAL_STYLE_VARIANTS = 4  # variants 0, 1, 2, 3
+
 _VALID_TOP_LEVEL_KEYS = {
-    "meta", "theme", "branding", "business", "section_order",
+    "meta", "theme", "branding", "business", "section_order", "style_variant",
     "hero", "about", "features", "stats", "services", "process",
     "gallery", "team", "testimonials", "faq", "cta", "contact", "seo",
 }
@@ -140,6 +146,11 @@ async def generate_site(
             site_data = json.loads(raw_json)
             _strip_unknown_keys(site_data)
             _sanitize_ai_output(site_data)
+
+            # Assign a random style variant for visual variety.
+            # The AI doesn't control this — it's pure backend randomization.
+            site_data["style_variant"] = random.randint(0, TOTAL_STYLE_VARIANTS - 1)
+
             site_schema = SiteSchema(**site_data)
 
             cost_per_m = _COST_PER_1M.get(model, 1.0)

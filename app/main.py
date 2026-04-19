@@ -21,6 +21,7 @@ from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAudi
 from app.sites.models import Lead, ScrapedData, GeneratedSite, SiteVersion, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase  # noqa: F401
 from app.billing.models import Subscription, Payment, BillingDetails  # noqa: F401
 from app.media.models import MediaFile  # noqa: F401
+from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -70,14 +71,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     expiration_task = asyncio.create_task(_expiration_loop())
 
+    # Smartlead status sync: poll every 15 minutes for email status updates
+    async def _smartlead_sync_loop():
+        from app.smartlead.service import sync_lead_statuses
+        from app.database import get_db_session
+        await asyncio.sleep(60)  # Initial delay — let app stabilize
+        while True:
+            try:
+                async with get_db_session() as db:
+                    await sync_lead_statuses(db)
+                logger.info("Smartlead status sync completed")
+            except Exception:
+                logger.exception("Smartlead status sync failed")
+            await asyncio.sleep(900)  # 15 minutes
+
+    smartlead_task = asyncio.create_task(_smartlead_sync_loop())
+
     yield
 
     # Graceful shutdown: cancel background tasks and let in-flight work drain.
     expiration_task.cancel()
-    try:
-        await expiration_task
-    except asyncio.CancelledError:
-        pass
+    smartlead_task.cancel()
+    for task in (expiration_task, smartlead_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await cache.close()
     await engine.dispose()
     logger.info("Shutdown complete")

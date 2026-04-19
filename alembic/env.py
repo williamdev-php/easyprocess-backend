@@ -11,6 +11,7 @@ from app.database import Base, SCHEMA
 # Import all models so metadata is populated
 from app.auth.models import User, Session, AuditLog, SocialAccount, PasswordResetToken, EmailVerificationToken, SettingsAuditLog  # noqa: F401
 from app.sites.models import Lead, ScrapedData, GeneratedSite, OutreachEmail, InboundEmail  # noqa: F401
+from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noqa: F401
 
 config = context.config
 

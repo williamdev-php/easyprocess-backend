@@ -35,6 +35,7 @@ class LeadStatus(str, enum.Enum):
     GENERATED = "GENERATED"
     EMAIL_SENT = "EMAIL_SENT"
     OPENED = "OPENED"
+    REPLIED = "REPLIED"
     CONVERTED = "CONVERTED"
     REJECTED = "REJECTED"
     FAILED = "FAILED"
@@ -76,6 +77,7 @@ class EmailStatus(str, enum.Enum):
     DELIVERED = "DELIVERED"
     OPENED = "OPENED"
     CLICKED = "CLICKED"
+    REPLIED = "REPLIED"
     BOUNCED = "BOUNCED"
     FAILED = "FAILED"
 
@@ -319,9 +321,15 @@ class OutreachEmail(Base):
         Enum(EmailStatus), default=EmailStatus.PENDING, nullable=False
     )
 
+    # Smartlead integration fields
+    smartlead_campaign_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    smartlead_lead_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sent_via: Mapped[str] = mapped_column(String(20), default="resend", nullable=False)
+
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

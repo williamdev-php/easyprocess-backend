@@ -44,7 +44,24 @@ REGLER:
 14. Generera 2-4 testimonials med realistiska svenska namn.
 15. Skriv LÅNGA, meningsfulla texter — about-texten ska vara minst 150 ord.
 16. SEO: Generera BARA title och description i meta. Skippa structured_data och robots — det genereras automatiskt senare.
-17. Använd BARA bild-URL:er som finns i listan med tillgängliga bilder. Hitta INTE PÅ nya URL:er."""
+17. Använd BARA bild-URL:er som finns i listan med tillgängliga bilder. Hitta INTE PÅ nya URL:er.
+18. STYLE VARIANT: Sidan tilldelas automatiskt en slumpmässig visuell stilvariant (style_variant) EFTER din generering — du behöver INTE ange den. Men var medveten om att dina sektioner kommer renderas i en av dessa varianter:
+
+TILLGÄNGLIGA STILVARIANTER:
+─────────────────────────────
+Variant 0 — Original:
+  Den ursprungliga designen. Rundade kort (rounded-2xl) med tunna borders, centrerade rubriker, dekorativa gradient-blobbar i bakgrunden, vertikal timeline för process-steg, accordion-FAQ. Bild till höger i om-oss. Klassiska teamkort med foto.
+
+Variant 1 — Modern Cards:
+  Moderna kort med mjuka skuggor (rounded-xl). 2-kolumnig layout, kort-baserad process istället för timeline, citat-stil testimonials med vänster-border, featured galleri där första bilden är stor. Kontaktformulär i kort-wrapper.
+
+Variant 2 — Clean & Minimal:
+  Ren och minimalistisk. Vänsterjusterade rubriker, inga dekorativa blobbar, liten border-radius (rounded-lg), FAQ visas i två kolumner utan accordion, horisontella teamkort med liten bild + text bredvid varandra. Split CTA med text vänster + knapp höger. Tvåkolumns kontaktlayout.
+
+Variant 3 — Bold & Filled:
+  Djärv och fyllig. Inga borders alls — bara stora skuggor (shadow-lg). Extra stor border-radius (rounded-3xl), pill-formade knappar (rounded-full), horisontella process-steg med anslutningslinje, masonry-stil galleri med varierande höjder, cirkulära teambilder, minimal CTA med glasmorfism-knapp.
+─────────────────────────────
+Anpassa ditt innehåll så att det fungerar bra oavsett variant. Skriv t.ex. tillräckligt med process-steg (3-5) för att horisontell layout ska se bra ut, och tillräckligt med FAQ (4-6) för att tvåkolumns-layout ska fyllas."""
 
 USER_PROMPT_TEMPLATE = """Skapa en komplett, rik hemsida i JSON-format för detta företag.
 

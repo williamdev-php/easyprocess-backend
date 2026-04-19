@@ -38,10 +38,12 @@ from app.sites.graphql_types import (
     LeadListType,
     LeadType,
     OutreachEmailType,
+    OutreachStatsType,
     PublishResult,
     SaveDraftInput,
     ScrapedDataType,
     SiteAnalyticsType,
+    SmartleadMessageType,
     SubdomainInfoType,
     SiteVersionType,
     UpdateSiteDataInput,
@@ -163,9 +165,13 @@ def _email_to_gql(e: OutreachEmail) -> OutreachEmailType:
         subject=e.subject,
         status=e.status.value,
         resend_id=e.resend_id,
+        smartlead_campaign_id=e.smartlead_campaign_id,
+        smartlead_lead_id=e.smartlead_lead_id,
+        sent_via=e.sent_via,
         sent_at=e.sent_at,
         opened_at=e.opened_at,
         clicked_at=e.clicked_at,
+        replied_at=e.replied_at,
         created_at=e.created_at,
     )
 
@@ -502,13 +508,11 @@ class SiteQuery:
 
     @strawberry.field
     async def my_domains(self, info: Info) -> list[CustomDomainType]:
-        """Get all domains belonging to the current user.
+        """Get custom domains belonging to the current user.
 
-        Includes both:
-        - Custom domains from the custom_domains table
-        - Auto-generated subdomain entries from the user's sites
+        Only returns entries from the custom_domains table.
+        Free subdomains are derived from site data on the frontend.
         """
-        from app.config import settings as _settings
         user = _require_user(await _get_user_from_info(info))
 
         async with get_db_session() as db:
@@ -520,38 +524,6 @@ class SiteQuery:
                 .order_by(CustomDomain.created_at.desc())
             )
             domains = [_domain_to_gql(d) for d in result.scalars().all()]
-
-            # 2. Subdomain entries from the user's sites
-            # These are platform subdomains (e.g. acme.qvickosite.com) that
-            # are always active and don't need DNS verification.
-            site_result = await db.execute(
-                select(GeneratedSite)
-                .join(Lead, GeneratedSite.lead_id == Lead.id)
-                .where(
-                    Lead.created_by == str(user.id),
-                    GeneratedSite.deleted_at.is_(None),
-                    GeneratedSite.subdomain.isnot(None),
-                )
-                .options(selectinload(GeneratedSite.lead))
-            )
-            # Collect custom-domain domains already in the list to avoid dupes
-            custom_domain_set = {d.domain for d in domains}
-            for site in site_result.scalars().all():
-                full = f"{site.subdomain}.{_settings.BASE_DOMAIN}"
-                if full in custom_domain_set:
-                    continue
-                domains.append(CustomDomainType(
-                    id=f"sub-{site.id}",
-                    domain=full,
-                    site_id=site.id,
-                    status="ACTIVE",
-                    site_subdomain=site.subdomain,
-                    site_business_name=site.lead.business_name if site.lead else None,
-                    verified_at=site.created_at,
-                    created_at=site.created_at,
-                    updated_at=site.updated_at,
-                    vercel_verification=None,
-                ))
 
             return domains
 
@@ -734,6 +706,10 @@ class SiteQuery:
             cost_result = await db.execute(select(func.sum(GeneratedSite.generation_cost_usd)))
             total_cost = cost_result.scalar() or 0.0
 
+            # Outreach stats (30 days)
+            from app.smartlead.service import get_outreach_stats
+            outreach = await get_outreach_stats(db)
+
             stats = DashboardStatsType(
                 total_leads=total_leads,
                 leads_new=lead_counts.get("NEW", 0),
@@ -746,6 +722,10 @@ class SiteQuery:
                 total_emails_sent=total_emails,
                 total_views=total_views,
                 total_ai_cost_usd=round(total_cost, 4),
+                outreach_sent_30d=outreach["emails_sent_30d"],
+                outreach_open_rate=outreach["open_rate"],
+                outreach_reply_rate=outreach["reply_rate"],
+                outreach_conversions_30d=outreach["conversions_30d"],
             )
 
             # Cache for 60 seconds
@@ -761,6 +741,10 @@ class SiteQuery:
                 "total_emails_sent": stats.total_emails_sent,
                 "total_views": stats.total_views,
                 "total_ai_cost_usd": stats.total_ai_cost_usd,
+                "outreach_sent_30d": stats.outreach_sent_30d,
+                "outreach_open_rate": stats.outreach_open_rate,
+                "outreach_reply_rate": stats.outreach_reply_rate,
+                "outreach_conversions_30d": stats.outreach_conversions_30d,
             }, ttl=60)
 
             return stats
@@ -926,6 +910,62 @@ class SiteQuery:
             for v in versions
         ]
 
+    @strawberry.field
+    async def outreach_stats(self, info: Info) -> OutreachStatsType:
+        """Outreach statistics for the admin dashboard (superadmin only)."""
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        from app.smartlead.service import get_outreach_stats
+
+        async with get_db_session() as db:
+            stats = await get_outreach_stats(db)
+
+        return OutreachStatsType(
+            emails_sent_30d=stats["emails_sent_30d"],
+            open_rate=stats["open_rate"],
+            reply_rate=stats["reply_rate"],
+            click_rate=stats["click_rate"],
+            bounce_rate=stats["bounce_rate"],
+            conversions_30d=stats["conversions_30d"],
+            daily_send_count=stats["daily_send_count"],
+            daily_send_limit=stats["daily_send_limit"],
+            warmup_status=stats["warmup_status"],
+            warmup_day=stats["warmup_day"],
+            warmup_days_target=stats["warmup_days_target"],
+        )
+
+    @strawberry.field
+    async def smartlead_messages(self, info: Info, lead_id: str) -> list[SmartleadMessageType]:
+        """Fetch Smartlead message history for a lead (superadmin only)."""
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        from app.smartlead.service import fetch_message_history
+
+        async with get_db_session() as db:
+            messages = await fetch_message_history(db, lead_id)
+
+        result = []
+        for msg in messages:
+            ts = msg.get("timestamp")
+            if isinstance(ts, str):
+                try:
+                    from datetime import datetime as dt
+                    ts = dt.fromisoformat(ts.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    ts = None
+
+            result.append(SmartleadMessageType(
+                id=msg.get("id", ""),
+                type=msg.get("type", "sent"),
+                subject=msg.get("subject"),
+                body=msg.get("body"),
+                from_email=msg.get("from_email", ""),
+                to_email=msg.get("to_email", ""),
+                timestamp=ts,
+                status=msg.get("status"),
+            ))
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Mutations
@@ -1011,7 +1051,7 @@ class SiteMutation:
 
     @strawberry.mutation
     async def send_outreach_email(self, info: Info, lead_id: str) -> OutreachEmailType:
-        """Send outreach email for a lead (superadmin only). Lead must have a generated site."""
+        """Send outreach email for a lead via Smartlead (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
         async with get_db_session() as db:

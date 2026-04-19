@@ -224,6 +224,11 @@ class SiteSchema(BaseModel):
         ]
     )
 
+    # Style variant — randomly assigned after AI generation to give visual variety.
+    # All sections on the page share the same variant number.
+    # 0 = Original, 1 = Modern Cards, 2 = Clean & Minimal, 3 = Bold & Filled
+    style_variant: int = 0
+
     # Content blocks — null means OFF
     hero: HeroData | None = None
     about: AboutData | None = None

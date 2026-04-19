@@ -16,15 +16,16 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.cache import cache
 from app.database import get_db
 from app.email.service import process_resend_webhook
+from app.rate_limit import limiter
 from app.sites.migration import normalize_site_data
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, get_optional_user
 from app.auth.models import User
 from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Lead, LeadStatus, PageView, SiteStatus
 from app.sites.site_schema import SiteSchema
@@ -269,6 +270,12 @@ async def claim_site(
 
     await db.commit()
 
+    # Notify Smartlead that lead converted (pause follow-up emails)
+    if site.lead and site.lead.status == LeadStatus.CONVERTED:
+        import asyncio
+        from app.smartlead.service import mark_lead_converted
+        asyncio.create_task(mark_lead_converted(site.lead.id))
+
     # Invalidate caches
     await cache.delete(f"site:{site.id}")
     await cache.delete(f"site:data:{site.id}")
@@ -278,6 +285,322 @@ async def claim_site(
         await cache.delete(f"resolve:sub:{site.subdomain}")
 
     return {"ok": True, "site_id": site.id}
+
+
+# ---------------------------------------------------------------------------
+# Create site: rate limiting & helpers
+# ---------------------------------------------------------------------------
+
+# Daily site creation limits per plan
+_SITE_LIMIT_FREE = 2
+_SITE_LIMIT_BASIC = 5
+_SITE_LIMIT_PRO = 20
+_SITE_LIMIT_IP = 5  # absolute IP limit regardless of plan
+
+
+async def _check_site_creation_rate(
+    db: AsyncSession,
+    user: User | None,
+    request: Request,
+) -> None:
+    """Enforce daily site creation limits based on plan and IP."""
+    from datetime import timedelta
+    from app.auth.service import get_client_ip
+
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 1. IP-based limit (applies to everyone)
+    ip = get_client_ip(request)
+    if ip:
+        ip_result = await db.execute(
+            select(func.count(Lead.id)).where(
+                Lead.created_at >= today_start,
+                Lead.source.in_(["create_direct", "create_transform"]),
+                # Use created_by as a proxy — for unauthenticated we'll track by source
+            )
+        )
+        # We can't track IP in leads table, so we use an in-memory approach via slowapi
+        # The IP rate limit is handled by the @limiter decorator on the endpoints
+
+    # 2. User-based limit (if authenticated)
+    if user:
+        user_result = await db.execute(
+            select(func.count(Lead.id)).where(
+                Lead.created_by == user.id,
+                Lead.created_at >= today_start,
+                Lead.source.in_(["create_direct", "create_transform"]),
+            )
+        )
+        user_count = user_result.scalar() or 0
+
+        # Determine plan limit
+        from app.billing.service import get_active_subscription
+        sub = await get_active_subscription(db, user.id)
+        if user.is_superuser:
+            limit = 999
+        elif sub is not None:
+            # Has active subscription — basic or pro
+            limit = _SITE_LIMIT_BASIC
+            # Check if pro (by checking price ID)
+            if sub.stripe_subscription_id:
+                try:
+                    import stripe
+                    stripe_sub = stripe.Subscription.retrieve(sub.stripe_subscription_id)
+                    price_id = stripe_sub["items"]["data"][0]["price"]["id"] if stripe_sub.get("items") else ""
+                    from app.config import settings as _s
+                    if price_id == _s.STRIPE_PRO_PRICE_ID:
+                        limit = _SITE_LIMIT_PRO
+                except Exception:
+                    pass  # Default to basic limit on error
+        else:
+            limit = _SITE_LIMIT_FREE
+
+        if user_count >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Du har natt gransen for antal hemsidor per dag ({limit}). Uppgradera din plan for att skapa fler.",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Create site: direct (no scraping) & from URL (transform)
+# ---------------------------------------------------------------------------
+
+
+class CreateSitePayload(BaseModel):
+    """Create a brand-new site from scratch using AI generation."""
+    business_name: str = Field(min_length=1, max_length=255)
+    industry: str | None = None
+    context: str = Field(default="", max_length=2000)
+    colors: dict | None = None  # {primary, secondary, accent, background, text}
+    logo_url: str | None = None
+    email: str | None = None  # user's contact email for the site
+
+
+class CreateSiteFromUrlPayload(BaseModel):
+    """Transform an existing website into a new site."""
+    website_url: str = Field(min_length=4, max_length=500)
+
+
+@router.post("/create")
+@limiter.limit("5/day")
+async def create_site_direct(
+    payload: CreateSitePayload,
+    request: Request,
+    current_user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Create a new site from scratch — AI generates content from the provided context.
+
+    Works for both authenticated and unauthenticated users. Unauthenticated users
+    get a claim_token to link the site to an account later.
+    """
+    await _check_site_creation_rate(db, current_user, request)
+
+    import secrets
+    from app.ai.generator import generate_site
+    from app.sites.subdomain import generate_unique_subdomain
+
+    user_id = str(current_user.id) if current_user else None
+
+    # Create a lead record to track this generation
+    lead = Lead(
+        website_url=f"https://qvicko.com/create/{payload.business_name.lower().replace(' ', '-')}",
+        business_name=payload.business_name,
+        industry=payload.industry,
+        source="create_direct",
+        status=LeadStatus.GENERATING,
+        created_by=user_id,
+    )
+    db.add(lead)
+    await db.commit()
+    await db.refresh(lead)
+    lead_id = lead.id
+
+    # Build context texts for the AI prompt
+    texts: dict = {
+        "title": payload.business_name,
+        "description": payload.context or "",
+        "about": payload.context or "",
+        "paragraphs": [payload.context] if payload.context else [],
+        "headings": [],
+    }
+
+    # Use provided colors or None (AI will generate)
+    colors = payload.colors
+
+    # Run generation in background
+    import asyncio
+
+    async def _generate_bg():
+        from app.database import get_db_session
+        async with get_db_session() as bg_db:
+            try:
+                gen_result = await generate_site(
+                    business_name=payload.business_name,
+                    industry=payload.industry,
+                    website_url="",
+                    email=payload.email,
+                    phone=None,
+                    address=None,
+                    texts=texts,
+                    colors=colors,
+                    services=None,
+                    logo_url=payload.logo_url,
+                    social_links=None,
+                    images=None,
+                    visual_analysis=None,
+                )
+
+                site_data = gen_result.site_schema.model_dump(mode="json")
+
+                subdomain = await generate_unique_subdomain(
+                    bg_db, payload.business_name, None
+                )
+                site = GeneratedSite(
+                    lead_id=lead_id,
+                    site_data=site_data,
+                    tokens_used=gen_result.tokens_used,
+                    ai_model=gen_result.model,
+                    generation_cost_usd=gen_result.cost_usd,
+                    status=SiteStatus.DRAFT,
+                    subdomain=subdomain,
+                    claim_token=secrets.token_urlsafe(32),
+                    claimed_by=user_id,
+                )
+                bg_db.add(site)
+
+                # Update lead status
+                result = await bg_db.execute(
+                    select(Lead).where(Lead.id == lead_id)
+                )
+                bg_lead = result.scalar_one_or_none()
+                if bg_lead:
+                    bg_lead.status = LeadStatus.GENERATED
+                    bg_lead.error_message = None
+
+                await bg_db.commit()
+                await cache.delete("admin:dashboard_stats")
+
+            except Exception as e:
+                import re as _re
+                await bg_db.rollback()
+                result = await bg_db.execute(
+                    select(Lead).where(Lead.id == lead_id)
+                )
+                bg_lead = result.scalar_one_or_none()
+                if bg_lead:
+                    bg_lead.status = LeadStatus.FAILED
+                    error_msg = str(e)[:500]
+                    error_msg = _re.sub(r'(sk-|key-|token-)[a-zA-Z0-9]{10,}', '[REDACTED]', error_msg)
+                    bg_lead.error_message = error_msg
+                    await bg_db.commit()
+
+    asyncio.create_task(_generate_bg())
+
+    return {
+        "ok": True,
+        "lead_id": lead_id,
+        "status": "GENERATING",
+    }
+
+
+@router.post("/create-from-url")
+@limiter.limit("5/day")
+async def create_site_from_url(
+    payload: CreateSiteFromUrlPayload,
+    request: Request,
+    current_user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Transform an existing website into a new Qvicko site.
+
+    Runs the full scrape+generate pipeline. Works for both authenticated
+    and unauthenticated users.
+    """
+    await _check_site_creation_rate(db, current_user, request)
+
+    from urllib.parse import urlparse
+
+    url = payload.website_url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if not parsed.hostname or "." not in parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid website URL")
+
+    user_id = str(current_user.id) if current_user else None
+
+    lead = Lead(
+        website_url=url,
+        source="create_transform",
+        status=LeadStatus.NEW,
+        created_by=user_id,
+    )
+    db.add(lead)
+    await db.commit()
+    await db.refresh(lead)
+    lead_id = lead.id
+
+    # Run pipeline in background
+    import asyncio
+    from app.scraper.pipeline import run_pipeline
+    from app.database import get_db_session
+
+    async def _pipeline_bg():
+        async with get_db_session() as bg_db:
+            await run_pipeline(bg_db, lead_id)
+            # If user is authenticated, auto-claim the site
+            if user_id:
+                result = await bg_db.execute(
+                    select(Lead)
+                    .where(Lead.id == lead_id)
+                    .options(selectinload(Lead.generated_site))
+                )
+                bg_lead = result.scalar_one_or_none()
+                if bg_lead and bg_lead.generated_site:
+                    bg_lead.generated_site.claimed_by = user_id
+                    bg_lead.created_by = user_id
+                    await bg_db.commit()
+
+    asyncio.create_task(_pipeline_bg())
+
+    return {
+        "ok": True,
+        "lead_id": lead_id,
+        "status": "NEW",
+    }
+
+
+@router.get("/create-status/{lead_id}")
+async def get_creation_status(
+    lead_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Poll the status of a site being generated."""
+    result = await db.execute(
+        select(Lead)
+        .where(Lead.id == lead_id)
+        .options(selectinload(Lead.generated_site))
+    )
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    response: dict = {
+        "lead_id": lead.id,
+        "status": lead.status.value,
+        "business_name": lead.business_name,
+        "error_message": lead.error_message,
+    }
+
+    if lead.generated_site:
+        site = lead.generated_site
+        response["site_id"] = site.id
+        response["subdomain"] = site.subdomain
+        response["claim_token"] = site.claim_token if not site.claimed_by else None
+
+    return response
 
 
 @router.get("/{site_id}")

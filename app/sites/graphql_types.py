@@ -21,6 +21,7 @@ class LeadStatusGQL(enum.Enum):
     GENERATED = "GENERATED"
     EMAIL_SENT = "EMAIL_SENT"
     OPENED = "OPENED"
+    REPLIED = "REPLIED"
     CONVERTED = "CONVERTED"
     REJECTED = "REJECTED"
     FAILED = "FAILED"
@@ -42,6 +43,7 @@ class EmailStatusGQL(enum.Enum):
     DELIVERED = "DELIVERED"
     OPENED = "OPENED"
     CLICKED = "CLICKED"
+    REPLIED = "REPLIED"
     BOUNCED = "BOUNCED"
     FAILED = "FAILED"
 
@@ -90,9 +92,13 @@ class OutreachEmailType:
     subject: str
     status: str
     resend_id: str | None = None
+    smartlead_campaign_id: int | None = None
+    smartlead_lead_id: int | None = None
+    sent_via: str = "resend"
     sent_at: datetime | None = None
     opened_at: datetime | None = None
     clicked_at: datetime | None = None
+    replied_at: datetime | None = None
     created_at: datetime
 
 
@@ -141,6 +147,11 @@ class DashboardStatsType:
     total_emails_sent: int = 0
     total_views: int = 0
     total_ai_cost_usd: float = 0.0
+    # Outreach stats
+    outreach_sent_30d: int = 0
+    outreach_open_rate: float = 0.0
+    outreach_reply_rate: float = 0.0
+    outreach_conversions_30d: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -366,3 +377,36 @@ class SiteVersionType:
     site_data: JSON
     label: str | None = None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Smartlead / Outreach types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class OutreachStatsType:
+    """Outreach statistics for the admin dashboard."""
+    emails_sent_30d: int = 0
+    open_rate: float = 0.0
+    reply_rate: float = 0.0
+    click_rate: float = 0.0
+    bounce_rate: float = 0.0
+    conversions_30d: int = 0
+    daily_send_count: int = 0
+    daily_send_limit: int = 0
+    warmup_status: str = "not_configured"
+    warmup_day: int = 0
+    warmup_days_target: int = 14
+
+
+@strawberry.type
+class SmartleadMessageType:
+    """A message from Smartlead message history (sent or reply)."""
+    id: str
+    type: str  # "sent" | "reply"
+    subject: str | None = None
+    body: str | None = None
+    from_email: str = ""
+    to_email: str = ""
+    timestamp: datetime | None = None
+    status: str | None = None
