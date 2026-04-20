@@ -8,8 +8,10 @@ from strawberry.fastapi import GraphQLRouter
 
 from app.auth.resolvers import Mutation as AuthMutation, Query as AuthQuery
 from app.billing.resolvers import BillingMutation, BillingQuery
+from app.billing.revenue_resolvers import RevenueQuery
 from app.media.resolvers import MediaMutation, MediaQuery
 from app.sites.resolvers import SiteMutation, SiteQuery
+from app.support.resolvers import SupportMutation, SupportQuery
 from app.tracking.resolvers import AnalyticsQuery
 
 logger = logging.getLogger(__name__)
@@ -66,12 +68,12 @@ class GraphQLRateLimitExtension(SchemaExtension):
 
 
 @strawberry.type
-class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery):
+class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery, RevenueQuery, SupportQuery):
     pass
 
 
 @strawberry.type
-class Mutation(AuthMutation, SiteMutation, BillingMutation, MediaMutation):
+class Mutation(AuthMutation, SiteMutation, BillingMutation, MediaMutation, SupportMutation):
     pass
 
 

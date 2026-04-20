@@ -109,6 +109,9 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Soft delete
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
@@ -271,5 +274,28 @@ class SettingsAuditLog(Base):
         Index("idx_settings_audit_event_type", "event_type"),
         Index("idx_settings_audit_entity", "entity_type", "entity_id"),
         Index("idx_settings_audit_created_at", "created_at"),
+        {"schema": SCHEMA},
+    )
+
+
+class SuperuserPromotion(Base):
+    """Tracks superuser promotions for rate limiting (max 1 per week)."""
+    __tablename__ = "superuser_promotions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    promoted_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"), nullable=False
+    )
+    promoted_by_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_superuser_promotions_created_at", "created_at"),
         {"schema": SCHEMA},
     )

@@ -76,7 +76,7 @@ async def _get_user_from_info(info: Info) -> User | None:
     if user is None:
         async with get_db_session() as db:
             user = await get_user_by_id(db, user_id)
-    if user and not user.is_active:
+    if user and (not user.is_active or user.deleted_at is not None):
         return None
     return user
 
@@ -503,7 +503,12 @@ class Mutation:
 
     @strawberry.mutation
     async def admin_update_user(self, info: Info, input: AdminUpdateUserInput) -> AdminUserDetailType:
-        """Update a user's profile/status (superadmin only)."""
+        """Update a user's profile/status (superadmin only).
+
+        Security:
+        - Superuser promotion is rate-limited to max 1 per week.
+        - Users cannot be hard-deleted via this mutation (soft delete only).
+        """
         caller = _require_user(await _get_user_from_info(info))
         if not caller.is_superuser:
             raise PermissionError("Superuser access required")
@@ -512,6 +517,21 @@ class Mutation:
             target = await get_user_by_id(db, input.user_id)
             if not target:
                 raise ValueError("User not found")
+
+            # --- Superuser promotion rate limit: max 1 per week ---
+            if input.is_superuser is not None and input.is_superuser and not target.is_superuser:
+                from datetime import timedelta
+                from app.auth.models import SuperuserPromotion
+                one_week_ago = datetime.now(timezone.utc) - timedelta(weeks=1)
+                recent = (await db.execute(
+                    select(func.count()).select_from(SuperuserPromotion)
+                    .where(SuperuserPromotion.created_at >= one_week_ago)
+                )).scalar() or 0
+                if recent >= 1:
+                    raise ValueError(
+                        "Superuser promotion rate limit: max 1 promotion per week. "
+                        "Try again later."
+                    )
 
             if input.full_name is not None:
                 target.full_name = input.full_name
@@ -530,10 +550,25 @@ class Mutation:
                 target.role = UserRole(input.role)
             if input.is_active is not None:
                 target.is_active = input.is_active
+                # Log deactivation/reactivation
+                request = info.context["request"]
+                ip = get_client_ip(request)
+                ua = request.headers.get("user-agent")
+                event = AuditEventType.ACCOUNT_DEACTIVATED if not input.is_active else AuditEventType.ACCOUNT_REACTIVATED
+                await log_audit_event(db, event, target.id, ip, ua, {"by": caller.id})
             if input.is_verified is not None:
                 target.is_verified = input.is_verified
             if input.is_superuser is not None:
+                was_superuser = target.is_superuser
                 target.is_superuser = input.is_superuser
+                # Log promotion
+                if input.is_superuser and not was_superuser:
+                    from app.auth.models import SuperuserPromotion
+                    promo = SuperuserPromotion(
+                        promoted_user_id=target.id,
+                        promoted_by_id=caller.id,
+                    )
+                    db.add(promo)
 
             target.updated_at = datetime.now(timezone.utc)
             await db.commit()

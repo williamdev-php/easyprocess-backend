@@ -17,12 +17,13 @@ from app.rate_limit import limiter
 from app.database import engine, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
-from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog  # noqa: F401
+from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog, SuperuserPromotion  # noqa: F401
 from app.sites.models import Lead, ScrapedData, GeneratedSite, SiteVersion, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase  # noqa: F401
 from app.billing.models import Subscription, Payment, BillingDetails  # noqa: F401
 from app.media.models import MediaFile  # noqa: F401
 from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noqa: F401
 from app.tracking.models import TrackingEvent  # noqa: F401
+from app.support.models import SupportTicket  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
