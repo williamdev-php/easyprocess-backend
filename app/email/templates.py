@@ -19,15 +19,18 @@ from __future__ import annotations
 
 from html import escape as html_escape
 
+from app.email.i18n import DEFAULT_LOCALE, t
+
 
 # ---------------------------------------------------------------------------
 # Shared layout helpers
 # ---------------------------------------------------------------------------
 
-def _wrap_layout(inner_html: str) -> str:
+def _wrap_layout(inner_html: str, locale: str = DEFAULT_LOCALE) -> str:
     """Wrap content in the shared email layout."""
+    footer = html_escape(t("common.footer_rights", locale))
     return f"""<!DOCTYPE html>
-<html lang="sv">
+<html lang="{locale}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -50,7 +53,7 @@ def _wrap_layout(inner_html: str) -> str:
         <!-- Footer -->
         <tr><td style="padding:20px 40px; border-top:1px solid #EDE7DC; text-align:center;">
           <p style="color:#7A9BAD; font-size:12px; margin:0;">
-            &copy; 2026 Qvicko. Alla r&auml;ttigheter f&ouml;rbeh&aring;llna.
+            {footer}
           </p>
         </td></tr>
 
@@ -83,8 +86,46 @@ def _info_box(text: str) -> str:
           </table>"""
 
 
+def _warning_box(text: str) -> str:
+    """Render a red warning box."""
+    return f"""          <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+            <tr><td style="background:#FDF0F0; border-radius:12px; padding:20px 24px; border:1px solid #E0D8CB;">
+              <p style="color:#C44D4D; font-size:14px; line-height:1.6; margin:0;">
+                {text}
+              </p>
+            </td></tr>
+          </table>"""
+
+
+def _heading(text: str) -> str:
+    return f'          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">{text}</h2>'
+
+
+def _greeting(text: str) -> str:
+    return f"""          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
+            {text}
+          </p>"""
+
+
+def _body_text(text: str, margin: str = "0 0 28px") -> str:
+    return f"""          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:{margin};">
+            {text}
+          </p>"""
+
+
+def _muted_text(text: str, size: str = "13px", margin: str = "28px 0 0") -> str:
+    return f"""          <p style="color:#7A9BAD; font-size:{size}; line-height:1.5; margin:{margin};">
+            {text}
+          </p>"""
+
+
+def _spacer() -> str:
+    return '          <div style="height:24px;"></div>'
+
+
 # ---------------------------------------------------------------------------
 # 1. Outreach email (plain text only — looks hand-written)
+#    NOTE: Outreach is marketing, not transactional. Swedish only.
 # ---------------------------------------------------------------------------
 
 def build_outreach_email(
@@ -123,20 +164,19 @@ def build_outreach_email(
         f"{from_name}"
     )
 
-    # Minimal HTML — just wraps the plain text so it renders fine in all clients
     html_body = (
         f"<div style=\"font-family:sans-serif; font-size:14px; color:#222; line-height:1.6;\">"
         f"<p>Hej {html_escape(business_name)}!</p>"
-        f"<p>Jag hittade er hemsida och s&aring;g att det finns potential att modernisera den. "
-        f"D&auml;rf&ouml;r tog jag mig friheten att skapa ett f&ouml;rslag p&aring; hur en ny, modern "
-        f"hemsida skulle kunna se ut f&ouml;r er.</p>"
-        f"<p>Jag har utg&aring;tt fr&aring;n ert befintliga inneh&aring;ll, era f&auml;rger och er profil "
-        f"f&ouml;r att skapa n&aring;got som k&auml;nns r&auml;tt f&ouml;r just ert f&ouml;retag.</p>"
-        f"<p>Kolla in f&ouml;rslaget h&auml;r: <a href=\"{html_escape(demo_url)}\">{html_escape(demo_url)}</a></p>"
-        f"<p>F&ouml;rslaget &auml;r helt kostnadsfritt och utan f&ouml;rpliktelser. Om ni gillar det "
-        f"kan vi prata vidare om hur jag kan hj&auml;lpa er att komma ig&aring;ng.</p>"
-        f"<p>H&ouml;r g&auml;rna av er om ni har fr&aring;gor!</p>"
-        f"<p>V&auml;nliga h&auml;lsningar,<br>{html_escape(from_name)}</p>"
+        f"<p>Jag hittade er hemsida och såg att det finns potential att modernisera den. "
+        f"Därför tog jag mig friheten att skapa ett förslag på hur en ny, modern "
+        f"hemsida skulle kunna se ut för er.</p>"
+        f"<p>Jag har utgått från ert befintliga innehåll, era färger och er profil "
+        f"för att skapa något som känns rätt för just ert företag.</p>"
+        f"<p>Kolla in förslaget här: <a href=\"{html_escape(demo_url)}\">{html_escape(demo_url)}</a></p>"
+        f"<p>Förslaget är helt kostnadsfritt och utan förpliktelser. Om ni gillar det "
+        f"kan vi prata vidare om hur jag kan hjälpa er att komma igång.</p>"
+        f"<p>Hör gärna av er om ni har frågor!</p>"
+        f"<p>Vänliga hälsningar,<br>{html_escape(from_name)}</p>"
         f"</div>"
     )
 
@@ -149,46 +189,36 @@ def build_outreach_email(
 
 def build_password_reset_email(
     reset_url: str,
-    user_name: str = "användare",
+    user_name: str | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
-    safe_name = html_escape(user_name)
+    name = user_name or t("common.default_user_name", locale)
+    safe_name = html_escape(name)
     safe_url = html_escape(reset_url)
 
-    subject = "Återställ ditt lösenord — Qvicko"
+    subject = t("password_reset.subject", locale)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">&Aring;terst&auml;ll ditt l&ouml;senord</h2>
+    inner = "\n\n".join([
+        _heading(t("password_reset.heading", locale)),
+        _greeting(t("password_reset.greeting", locale, name=safe_name)),
+        _body_text(t("password_reset.body", locale)),
+        _cta_button(safe_url, t("password_reset.cta", locale)),
+        _muted_text(t("common.ignore_if_not_requested", locale)),
+        _muted_text(
+            f'{t("common.copy_link_prefix", locale)} {safe_url}',
+            size="12px", margin="16px 0 0",
+        ),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 28px;">
-            Vi har f&aring;tt en beg&auml;ran om att &aring;terst&auml;lla l&ouml;senordet f&ouml;r ditt konto.
-            Klicka p&aring; knappen nedan f&ouml;r att v&auml;lja ett nytt l&ouml;senord.
-            L&auml;nken &auml;r giltig i 30&nbsp;minuter.
-          </p>
-
-{_cta_button(safe_url, "&Aring;terst&auml;ll l&ouml;senord")}
-
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Om du inte beg&auml;rde detta kan du ignorera detta meddelande.
-          </p>
-
-          <p style="color:#7A9BAD; font-size:12px; margin:16px 0 0; word-break:break-all;">
-            Eller kopiera denna l&auml;nk: {safe_url}
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Vi har fått en begäran om att återställa lösenordet för ditt konto. Klicka på länken nedan för att välja ett nytt lösenord. Länken är giltig i 30 minuter.
-
-Återställ lösenord: {reset_url}
-
-Om du inte begärde detta kan du ignorera detta meddelande.
-
-— Qvicko"""
+    plain_text = (
+        f"{t('password_reset.greeting', locale, name=name)}\n\n"
+        f"{t('password_reset.body', locale)}\n\n"
+        f"{t('password_reset.cta', locale)}: {reset_url}\n\n"
+        f"{t('common.ignore_if_not_requested', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -199,46 +229,36 @@ Om du inte begärde detta kan du ignorera detta meddelande.
 
 def build_verification_email(
     verify_url: str,
-    user_name: str = "användare",
+    user_name: str | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
-    safe_name = html_escape(user_name)
+    name = user_name or t("common.default_user_name", locale)
+    safe_name = html_escape(name)
     safe_url = html_escape(verify_url)
 
-    subject = "Verifiera din e-postadress — Qvicko"
+    subject = t("verification.subject", locale)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Verifiera din e-postadress</h2>
+    inner = "\n\n".join([
+        _heading(t("verification.heading", locale)),
+        _greeting(t("verification.greeting", locale, name=safe_name)),
+        _body_text(t("verification.body", locale)),
+        _cta_button(safe_url, t("verification.cta", locale)),
+        _muted_text(t("verification.ignore", locale)),
+        _muted_text(
+            f'{t("common.copy_link_prefix", locale)} {safe_url}',
+            size="12px", margin="16px 0 0",
+        ),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 28px;">
-            Tack f&ouml;r att du skapade ett konto hos Qvicko!
-            Klicka p&aring; knappen nedan f&ouml;r att verifiera din e-postadress och aktivera ditt konto.
-            L&auml;nken &auml;r giltig i 24&nbsp;timmar.
-          </p>
-
-{_cta_button(safe_url, "Verifiera e-post")}
-
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Om du inte skapade ett konto kan du ignorera detta meddelande.
-          </p>
-
-          <p style="color:#7A9BAD; font-size:12px; margin:16px 0 0; word-break:break-all;">
-            Eller kopiera denna l&auml;nk: {safe_url}
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Tack för att du skapade ett konto hos Qvicko! Klicka på länken nedan för att verifiera din e-postadress och aktivera ditt konto. Länken är giltig i 24 timmar.
-
-Verifiera e-post: {verify_url}
-
-Om du inte skapade ett konto kan du ignorera detta meddelande.
-
-— Qvicko"""
+    plain_text = (
+        f"{t('verification.greeting', locale, name=name)}\n\n"
+        f"{t('verification.body', locale)}\n\n"
+        f"{t('verification.cta', locale)}: {verify_url}\n\n"
+        f"{t('verification.ignore', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -252,51 +272,44 @@ def build_site_published_email(
     business_name: str,
     site_url: str,
     dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
     safe_site = html_escape(site_url)
     safe_dash = html_escape(dashboard_url)
 
-    subject = f"Er hemsida är live — {business_name}"
+    subject = t("site_published.subject", locale, business_name=business_name)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Er hemsida &auml;r live!</h2>
+    dashboard_text = t(
+        "site_published.dashboard_text", locale,
+        link_start=f'<a href="{safe_dash}" style="color:#326586; text-decoration:underline;">',
+        link_end="</a>",
+    )
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    inner = "\n\n".join([
+        _heading(t("site_published.heading", locale)),
+        _greeting(t("site_published.greeting", locale, name=safe_name)),
+        _body_text(
+            t("site_published.body", locale, business_name=f"<strong>{safe_biz}</strong>"),
+            margin="0 0 24px",
+        ),
+        _info_box(t("site_published.trial_info", locale)),
+        _spacer(),
+        _cta_button(safe_site, t("site_published.cta", locale)),
+        _body_text(dashboard_text, margin="28px 0 0"),
+    ])
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Grattis! Hemsidan f&ouml;r <strong>{safe_biz}</strong> &auml;r nu publicerad och tillg&auml;nglig f&ouml;r bes&ouml;kare.
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-{_info_box(
-    f"<strong>Gratis i 30 dagar</strong> &mdash; er hemsida &auml;r kostnadsfri de f&ouml;rsta 30 dagarna. "
-    f"F&ouml;r att beh&aring;lla den efter det beh&ouml;ver ni koppla en betalningsmetod. "
-    f"Om ingen betalning registreras tas hemsidan bort efter 45 dagar."
-)}
-
-          <div style="height:24px;"></div>
-
-{_cta_button(safe_site, "Bes&ouml;k er hemsida")}
-
-          <p style="color:#4A7A96; font-size:14px; line-height:1.6; margin:28px 0 0;">
-            Logga in p&aring; <a href="{safe_dash}" style="color:#326586; text-decoration:underline;">ert konto</a> f&ouml;r att hantera hemsidan, koppla en egen dom&auml;n eller l&auml;gga till en betalningsmetod.
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Grattis! Hemsidan för {business_name} är nu publicerad och tillgänglig för besökare.
-
-Besök er hemsida: {site_url}
-
-GRATIS I 30 DAGAR — er hemsida är kostnadsfri de första 30 dagarna. För att behålla den efter det behöver ni koppla en betalningsmetod. Om ingen betalning registreras tas hemsidan bort efter 45 dagar.
-
-Logga in på ert konto för att hantera hemsidan: {dashboard_url}
-
-— Qvicko"""
+    plain_text = (
+        f"{t('site_published.greeting', locale, name=user_name)}\n\n"
+        f"{t('site_published.body', locale, business_name=business_name)}\n\n"
+        f"{t('site_published.cta', locale)}: {site_url}\n\n"
+        f"{t('site_published.trial_info', locale)}\n\n"
+        f"{t('site_published.dashboard_text', locale, link_start='', link_end='')}: {dashboard_url}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -310,50 +323,37 @@ def build_trial_ending_email(
     business_name: str,
     days_left: int,
     dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
     safe_dash = html_escape(dashboard_url)
 
-    subject = f"Er gratis period går ut om {days_left} dagar — {business_name}"
+    subject = t("trial_ending.subject", locale, business_name=business_name, days_left=days_left)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Er gratis period g&aring;r snart ut</h2>
+    inner = "\n\n".join([
+        _heading(t("trial_ending.heading", locale)),
+        _greeting(t("trial_ending.greeting", locale, name=safe_name)),
+        _body_text(
+            t("trial_ending.body", locale, business_name=f"<strong>{safe_biz}</strong>", days_left=f"<strong>{days_left}</strong>"),
+            margin="0 0 24px",
+        ),
+        _info_box(t("trial_ending.info", locale)),
+        _spacer(),
+        _cta_button(safe_dash, t("trial_ending.cta", locale)),
+        _muted_text(t("common.questions_reply", locale)),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Den kostnadsfria perioden f&ouml;r <strong>{safe_biz}</strong> g&aring;r ut om <strong>{days_left}&nbsp;dagar</strong>.
-            F&ouml;r att er hemsida ska forts&auml;tta vara tillg&auml;nglig beh&ouml;ver ni koppla en betalningsmetod.
-          </p>
-
-{_info_box(
-    f"Om ingen betalningsmetod kopplas inom 30 dagar fr&aring;n publiceringen "
-    f"pausas hemsidan. Efter ytterligare 15 dagar raderas den permanent."
-)}
-
-          <div style="height:24px;"></div>
-
-{_cta_button(safe_dash, "Koppla betalningsmetod")}
-
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Har ni fr&aring;gor? Svara p&aring; detta mail s&aring; hj&auml;lper vi er.
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Den kostnadsfria perioden för {business_name} går ut om {days_left} dagar. För att er hemsida ska fortsätta vara tillgänglig behöver ni koppla en betalningsmetod.
-
-Om ingen betalningsmetod kopplas inom 30 dagar från publiceringen pausas hemsidan. Efter ytterligare 15 dagar raderas den permanent.
-
-Koppla betalningsmetod: {dashboard_url}
-
-Har ni frågor? Svara på detta mail så hjälper vi er.
-
-— Qvicko"""
+    plain_text = (
+        f"{t('trial_ending.greeting', locale, name=user_name)}\n\n"
+        f"{t('trial_ending.body', locale, business_name=business_name, days_left=days_left)}\n\n"
+        f"{t('trial_ending.info', locale)}\n\n"
+        f"{t('trial_ending.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.questions_reply', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -367,50 +367,39 @@ def build_site_paused_email(
     business_name: str,
     days_until_deletion: int,
     dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
     safe_dash = html_escape(dashboard_url)
 
-    subject = f"Er hemsida har pausats — {business_name}"
+    subject = t("site_paused.subject", locale, business_name=business_name)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Er hemsida har pausats</h2>
+    inner = "\n\n".join([
+        _heading(t("site_paused.heading", locale)),
+        _greeting(t("site_paused.greeting", locale, name=safe_name)),
+        _body_text(
+            t("site_paused.body", locale, business_name=f"<strong>{safe_biz}</strong>"),
+            margin="0 0 24px",
+        ),
+        _info_box(
+            f"<strong>{t('site_paused.info', locale, days_until_deletion=days_until_deletion)}</strong>"
+        ),
+        _spacer(),
+        _cta_button(safe_dash, t("site_paused.cta", locale)),
+        _muted_text(t("common.questions_reply", locale)),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Den kostnadsfria perioden f&ouml;r <strong>{safe_biz}</strong> har g&aring;tt ut.
-            Er hemsida &auml;r inte l&auml;ngre synlig f&ouml;r bes&ouml;kare.
-          </p>
-
-{_info_box(
-    f"<strong>Hemsidan raderas om {days_until_deletion} dagar.</strong> "
-    f"Koppla en betalningsmetod innan dess f&ouml;r att &aring;teraktivera den."
-)}
-
-          <div style="height:24px;"></div>
-
-{_cta_button(safe_dash, "Koppla betalningsmetod")}
-
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Har ni fr&aring;gor? Svara p&aring; detta mail s&aring; hj&auml;lper vi er.
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Den kostnadsfria perioden för {business_name} har gått ut. Er hemsida är inte längre synlig för besökare.
-
-Hemsidan raderas om {days_until_deletion} dagar. Koppla en betalningsmetod innan dess för att återaktivera den.
-
-Koppla betalningsmetod: {dashboard_url}
-
-Har ni frågor? Svara på detta mail så hjälper vi er.
-
-— Qvicko"""
+    plain_text = (
+        f"{t('site_paused.greeting', locale, name=user_name)}\n\n"
+        f"{t('site_paused.body', locale, business_name=business_name)}\n\n"
+        f"{t('site_paused.info', locale, days_until_deletion=days_until_deletion)}\n\n"
+        f"{t('site_paused.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.questions_reply', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -424,53 +413,39 @@ def build_site_deletion_warning_email(
     business_name: str,
     days_until_deletion: int,
     dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
     safe_dash = html_escape(dashboard_url)
 
-    subject = f"Sista chansen — er hemsida raderas om {days_until_deletion} dagar"
+    subject = t("site_deletion_warning.subject", locale, days_until_deletion=days_until_deletion)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Er hemsida raderas snart</h2>
+    inner = "\n\n".join([
+        _heading(t("site_deletion_warning.heading", locale)),
+        _greeting(t("site_deletion_warning.greeting", locale, name=safe_name)),
+        _body_text(
+            t("site_deletion_warning.body", locale,
+              business_name=f"<strong>{safe_biz}</strong>",
+              days_until_deletion=f"<strong>{days_until_deletion}</strong>"),
+            margin="0 0 24px",
+        ),
+        _warning_box(f"<strong>{t('site_deletion_warning.warning', locale)}</strong>"),
+        _spacer(),
+        _cta_button(safe_dash, t("site_deletion_warning.cta", locale)),
+        _muted_text(t("common.questions_reply", locale)),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Hemsidan f&ouml;r <strong>{safe_biz}</strong> kommer att <strong>raderas permanent
-            om {days_until_deletion}&nbsp;dagar</strong> om ingen betalningsmetod kopplas.
-          </p>
-
-          <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
-            <tr><td style="background:#FDF0F0; border-radius:12px; padding:20px 24px; border:1px solid #E0D8CB;">
-              <p style="color:#C44D4D; font-size:14px; line-height:1.6; margin:0;">
-                <strong>Detta g&aring;r inte att &aring;ngra.</strong> N&auml;r hemsidan &auml;r raderad f&ouml;rsvinner allt inneh&aring;ll, dom&auml;nkopplingar och statistik.
-              </p>
-            </td></tr>
-          </table>
-
-          <div style="height:24px;"></div>
-
-{_cta_button(safe_dash, "Koppla betalningsmetod nu")}
-
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Har ni fr&aring;gor? Svara p&aring; detta mail s&aring; hj&auml;lper vi er.
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Hemsidan för {business_name} kommer att RADERAS PERMANENT om {days_until_deletion} dagar om ingen betalningsmetod kopplas.
-
-Detta går inte att ångra. När hemsidan är raderad försvinner allt innehåll, domänkopplingar och statistik.
-
-Koppla betalningsmetod nu: {dashboard_url}
-
-Har ni frågor? Svara på detta mail så hjälper vi er.
-
-— Qvicko"""
+    plain_text = (
+        f"{t('site_deletion_warning.greeting', locale, name=user_name)}\n\n"
+        f"{t('site_deletion_warning.body', locale, business_name=business_name, days_until_deletion=days_until_deletion)}\n\n"
+        f"{t('site_deletion_warning.warning', locale)}\n\n"
+        f"{t('site_deletion_warning.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.questions_reply', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -482,42 +457,33 @@ Har ni frågor? Svara på detta mail så hjälper vi er.
 def build_site_deleted_email(
     user_name: str,
     business_name: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
 
-    subject = f"Er hemsida har raderats — {business_name}"
+    subject = t("site_deleted.subject", locale, business_name=business_name)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Er hemsida har raderats</h2>
+    inner = "\n\n".join([
+        _heading(t("site_deleted.heading", locale)),
+        _greeting(t("site_deleted.greeting", locale, name=safe_name)),
+        _body_text(
+            t("site_deleted.body", locale, business_name=f"<strong>{safe_biz}</strong>"),
+            margin="0 0 24px",
+        ),
+        _body_text(t("site_deleted.content_removed", locale), margin="0 0 16px"),
+        _body_text(t("site_deleted.welcome_back", locale), margin="0"),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Hemsidan f&ouml;r <strong>{safe_biz}</strong> har nu raderats d&aring; ingen betalningsmetod kopplades inom tidsfristen.
-          </p>
-
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 16px;">
-            Allt inneh&aring;ll, dom&auml;nkopplingar och statistik har tagits bort permanent.
-          </p>
-
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0;">
-            Om ni vill ha en ny hemsida i framtiden &auml;r ni varmt v&auml;lkomna tillbaka.
-            H&ouml;r av er s&aring; hj&auml;lper vi er!
-          </p>"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-Hemsidan för {business_name} har nu raderats då ingen betalningsmetod kopplades inom tidsfristen.
-
-Allt innehåll, domänkopplingar och statistik har tagits bort permanent.
-
-Om ni vill ha en ny hemsida i framtiden är ni varmt välkomna tillbaka. Hör av er så hjälper vi er!
-
-— Qvicko"""
+    plain_text = (
+        f"{t('site_deleted.greeting', locale, name=user_name)}\n\n"
+        f"{t('site_deleted.body', locale, business_name=business_name)}\n\n"
+        f"{t('site_deleted.content_removed', locale)}\n\n"
+        f"{t('site_deleted.welcome_back', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
@@ -530,79 +496,208 @@ def build_payment_method_added_email(
     user_name: str,
     business_name: str,
     dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
 ) -> tuple[str, str, str]:
     safe_name = html_escape(user_name)
     safe_biz = html_escape(business_name)
     safe_dash = html_escape(dashboard_url)
 
-    subject = f"Betalningsmetod kopplad — {business_name}"
+    subject = t("payment_method_added.subject", locale, business_name=business_name)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Betalningsmetod kopplad!</h2>
+    inner = "\n\n".join([
+        _heading(t("payment_method_added.heading", locale)),
+        _greeting(t("payment_method_added.greeting", locale, name=safe_name)),
+        _body_text(
+            t("payment_method_added.body", locale, business_name=f"<strong>{safe_biz}</strong>"),
+            margin="0 0 24px",
+        ),
+        _info_box(t("payment_method_added.info", locale)),
+        _spacer(),
+        _cta_button(safe_dash, t("payment_method_added.cta", locale)),
+    ])
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Hej {safe_name},
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            En betalningsmetod har kopplats till hemsidan f&ouml;r <strong>{safe_biz}</strong>.
-            Er hemsida &auml;r nu s&auml;krad och kommer att forts&auml;tta vara tillg&auml;nglig.
-          </p>
-
-{_info_box(
-    "Ni kan n&auml;r som helst &auml;ndra betalningsmetod eller se er fakturering i kontrollpanelen."
-)}
-
-          <div style="height:24px;"></div>
-
-{_cta_button(safe_dash, "G&aring; till kontrollpanelen")}"""
-
-    html_body = _wrap_layout(inner)
-
-    plain_text = f"""Hej {user_name},
-
-En betalningsmetod har kopplats till hemsidan för {business_name}. Er hemsida är nu säkrad och kommer att fortsätta vara tillgänglig.
-
-Ni kan när som helst ändra betalningsmetod eller se er fakturering i kontrollpanelen: {dashboard_url}
-
-— Qvicko"""
+    plain_text = (
+        f"{t('payment_method_added.greeting', locale, name=user_name)}\n\n"
+        f"{t('payment_method_added.body', locale, business_name=business_name)}\n\n"
+        f"{t('payment_method_added.info', locale)}\n\n"
+        f"{t('payment_method_added.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
     return subject, html_body, plain_text
 
 
 # ---------------------------------------------------------------------------
-# Site deletion confirmation email
+# 10. Support ticket: confirmation
+# ---------------------------------------------------------------------------
+
+def build_ticket_created_email(
+    user_name: str,
+    ticket_subject: str,
+    dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
+) -> tuple[str, str, str]:
+    safe_name = html_escape(user_name)
+    safe_subj = html_escape(ticket_subject)
+    safe_dash = html_escape(dashboard_url)
+
+    subject = t("ticket_created.subject", locale)
+
+    inner = "\n\n".join([
+        _heading(t("ticket_created.heading", locale)),
+        _greeting(t("ticket_created.greeting", locale, name=safe_name)),
+        _body_text(t("ticket_created.body", locale), margin="0 0 24px"),
+        _info_box(f"<strong>{t('ticket_created.subject_label', locale)}</strong> {safe_subj}"),
+        _spacer(),
+        _body_text(t("ticket_created.follow_status", locale), margin="0 0 24px"),
+        _cta_button(safe_dash, t("ticket_created.cta", locale)),
+        _muted_text(t("ticket_created.response_time", locale)),
+    ])
+
+    html_body = _wrap_layout(inner, locale)
+
+    plain_text = (
+        f"{t('ticket_created.greeting', locale, name=user_name)}\n\n"
+        f"{t('ticket_created.body', locale)}\n\n"
+        f"{t('ticket_created.subject_label', locale)} {ticket_subject}\n\n"
+        f"{t('ticket_created.follow_status', locale)}: {dashboard_url}\n\n"
+        f"{t('ticket_created.response_time', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
+
+    return subject, html_body, plain_text
+
+
+# ---------------------------------------------------------------------------
+# 11. Support ticket: admin replied
+# ---------------------------------------------------------------------------
+
+def build_ticket_replied_email(
+    user_name: str,
+    ticket_subject: str,
+    admin_reply: str,
+    dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
+) -> tuple[str, str, str]:
+    safe_name = html_escape(user_name)
+    safe_subj = html_escape(ticket_subject)
+    safe_reply = html_escape(admin_reply)
+    safe_dash = html_escape(dashboard_url)
+
+    subject = t("ticket_replied.subject", locale, ticket_subject=ticket_subject)
+
+    inner = "\n\n".join([
+        _heading(t("ticket_replied.heading", locale)),
+        _greeting(t("ticket_replied.greeting", locale, name=safe_name)),
+        _body_text(
+            t("ticket_replied.body", locale, ticket_subject=f"<strong>&ldquo;{safe_subj}&rdquo;</strong>"),
+            margin="0 0 24px",
+        ),
+        _info_box(safe_reply.replace("\n", "<br>")),
+        _spacer(),
+        _cta_button(safe_dash, t("ticket_replied.cta", locale)),
+        _muted_text(t("ticket_replied.conversation_note", locale)),
+    ])
+
+    html_body = _wrap_layout(inner, locale)
+
+    plain_text = (
+        f"{t('ticket_replied.greeting', locale, name=user_name)}\n\n"
+        f"{t('ticket_replied.body', locale, ticket_subject=ticket_subject)}\n\n"
+        f"{admin_reply}\n\n"
+        f"{t('ticket_replied.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
+
+    return subject, html_body, plain_text
+
+
+# ---------------------------------------------------------------------------
+# 12. Support ticket: status changed
+# ---------------------------------------------------------------------------
+
+def build_ticket_status_email(
+    user_name: str,
+    ticket_subject: str,
+    new_status: str,
+    dashboard_url: str,
+    locale: str = DEFAULT_LOCALE,
+) -> tuple[str, str, str]:
+    safe_name = html_escape(user_name)
+    safe_subj = html_escape(ticket_subject)
+    safe_dash = html_escape(dashboard_url)
+
+    status_labels: dict = t("ticket_status.status_labels", locale)  # type: ignore[assignment]
+    status_text = status_labels.get(new_status, new_status)
+
+    subject = t("ticket_status.subject", locale, ticket_subject=ticket_subject)
+
+    inner = "\n\n".join([
+        _heading(t("ticket_status.heading", locale)),
+        _greeting(t("ticket_status.greeting", locale, name=safe_name)),
+        _body_text(
+            t("ticket_status.body", locale,
+              ticket_subject=f"<strong>&ldquo;{safe_subj}&rdquo;</strong>",
+              status_text=status_text),
+            margin="0 0 24px",
+        ),
+        _cta_button(safe_dash, t("ticket_status.cta", locale)),
+    ])
+
+    html_body = _wrap_layout(inner, locale)
+
+    plain_text = (
+        f"{t('ticket_status.greeting', locale, name=user_name)}\n\n"
+        f"{t('ticket_status.body', locale, ticket_subject=ticket_subject, status_text=status_text)}\n\n"
+        f"{t('ticket_status.cta', locale)}: {dashboard_url}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
+
+    return subject, html_body, plain_text
+
+
+# ---------------------------------------------------------------------------
+# 13. Site deletion confirmation email
 # ---------------------------------------------------------------------------
 
 def build_site_deletion_email(
     site_name: str,
     token: str,
-) -> str:
-    """Build HTML email for site deletion confirmation."""
+    frontend_url: str = "https://qvicko.com",
+    locale: str = DEFAULT_LOCALE,
+) -> tuple[str, str, str]:
+    """Build subject, html_body, and plain_text for site deletion confirmation."""
     safe_name = html_escape(site_name)
-    confirm_url = f"https://qvicko.com/sv/dashboard/pages?confirm_delete={token}"
+    confirm_url = f"{frontend_url}/{locale}/dashboard/pages?confirm_delete={token}"
     safe_url = html_escape(confirm_url)
 
-    inner = f"""          <h2 style="color:#1A3A50; margin:0 0 16px; font-size:22px;">Bekr&auml;fta radering</h2>
+    subject = t("site_deletion_confirm.subject", locale, site_name=site_name)
 
-          <p style="color:#1A3A50; font-size:15px; line-height:1.6; margin:0 0 12px;">
-            Du har beg&auml;rt att radera hemsidan <strong>{safe_name}</strong>.
-          </p>
+    inner = "\n\n".join([
+        _heading(t("site_deletion_confirm.heading", locale)),
+        _body_text(
+            t("site_deletion_confirm.body", locale, site_name=f"<strong>{safe_name}</strong>"),
+            margin="0 0 12px",
+        ),
+        _body_text(t("site_deletion_confirm.warning", locale), margin="0 0 24px"),
+        _cta_button(safe_url, t("site_deletion_confirm.cta", locale)),
+        _muted_text(t("site_deletion_confirm.ignore", locale)),
+        _muted_text(
+            f'{t("common.copy_link_prefix", locale)} {safe_url}',
+            size="12px", margin="16px 0 0",
+        ),
+    ])
 
-          <p style="color:#4A7A96; font-size:15px; line-height:1.6; margin:0 0 24px;">
-            Denna &aring;tg&auml;rd kan inte &aring;ngras. Hemsidan kommer att d&ouml;ljas fr&aring;n alla
-            bes&ouml;kare och alla kopplade dom&auml;ner kommer att tas bort.
-            Klicka p&aring; knappen nedan f&ouml;r att bekr&auml;fta raderingen.
-            L&auml;nken &auml;r giltig i 24&nbsp;timmar.
-          </p>
+    html_body = _wrap_layout(inner, locale)
 
-{_cta_button(safe_url, "Bekr&auml;fta radering")}
+    plain_text = (
+        f"{t('site_deletion_confirm.body', locale, site_name=site_name)}\n\n"
+        f"{t('site_deletion_confirm.warning', locale)}\n\n"
+        f"{t('site_deletion_confirm.cta', locale)}: {confirm_url}\n\n"
+        f"{t('site_deletion_confirm.ignore', locale)}\n\n"
+        f"{t('common.sign_off', locale)}"
+    )
 
-          <p style="color:#7A9BAD; font-size:13px; line-height:1.5; margin:28px 0 0;">
-            Om du inte beg&auml;rde denna radering kan du ignorera detta meddelande.
-          </p>
-
-          <p style="color:#7A9BAD; font-size:12px; margin:16px 0 0; word-break:break-all;">
-            Eller kopiera denna l&auml;nk: {safe_url}
-          </p>"""
-
-    return _wrap_layout(inner)
+    return subject, html_body, plain_text

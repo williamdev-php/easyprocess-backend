@@ -1,0 +1,124 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 Qvicko. All rights reserved.",
+    "default_user_name": "user",
+    "sign_off": "\u2014 Qvicko",
+    "copy_link_prefix": "Or copy this link:",
+    "questions_reply": "Have questions? Reply to this email and we\u2019ll help you.",
+    "ignore_if_not_requested": "If you didn\u2019t request this, you can safely ignore this message."
+  },
+
+  "password_reset": {
+    "subject": "Reset your password \u2014 Qvicko",
+    "heading": "Reset your password",
+    "greeting": "Hi {name},",
+    "body": "We received a request to reset the password for your account. Click the button below to choose a new password. The link is valid for 30\u00a0minutes.",
+    "cta": "Reset password"
+  },
+
+  "verification": {
+    "subject": "Verify your email address \u2014 Qvicko",
+    "heading": "Verify your email address",
+    "greeting": "Hi {name},",
+    "body": "Thank you for creating an account with Qvicko! Click the button below to verify your email address and activate your account. The link is valid for 24\u00a0hours.",
+    "cta": "Verify email",
+    "ignore": "If you didn\u2019t create an account, you can safely ignore this message."
+  },
+
+  "site_published": {
+    "subject": "Your website is live \u2014 {business_name}",
+    "heading": "Your website is live!",
+    "greeting": "Hi {name},",
+    "body": "Congratulations! The website for {business_name} is now published and available to visitors.",
+    "trial_info": "Free for 30 days \u2014 your website is free for the first 30 days. To keep it after that, you need to add a payment method. If no payment is registered, the website will be removed after 45 days.",
+    "cta": "Visit your website",
+    "dashboard_text": "Log in to {link_start}your account{link_end} to manage the website, connect a custom domain, or add a payment method."
+  },
+
+  "trial_ending": {
+    "subject": "Your free period expires in {days_left} days \u2014 {business_name}",
+    "heading": "Your free period is ending soon",
+    "greeting": "Hi {name},",
+    "body": "The free period for {business_name} expires in {days_left}\u00a0days. To keep your website available, you need to add a payment method.",
+    "info": "If no payment method is added within 30 days of publishing, the website will be paused. After an additional 15 days, it will be permanently deleted.",
+    "cta": "Add payment method"
+  },
+
+  "site_paused": {
+    "subject": "Your website has been paused \u2014 {business_name}",
+    "heading": "Your website has been paused",
+    "greeting": "Hi {name},",
+    "body": "The free period for {business_name} has expired. Your website is no longer visible to visitors.",
+    "info": "The website will be deleted in {days_until_deletion} days. Add a payment method before then to reactivate it.",
+    "cta": "Add payment method"
+  },
+
+  "site_deletion_warning": {
+    "subject": "Last chance \u2014 your website will be deleted in {days_until_deletion} days",
+    "heading": "Your website will be deleted soon",
+    "greeting": "Hi {name},",
+    "body": "The website for {business_name} will be permanently deleted in {days_until_deletion}\u00a0days if no payment method is added.",
+    "warning": "This cannot be undone. When the website is deleted, all content, domain connections, and statistics will be lost.",
+    "cta": "Add payment method now"
+  },
+
+  "site_deleted": {
+    "subject": "Your website has been deleted \u2014 {business_name}",
+    "heading": "Your website has been deleted",
+    "greeting": "Hi {name},",
+    "body": "The website for {business_name} has been deleted because no payment method was added within the deadline.",
+    "content_removed": "All content, domain connections, and statistics have been permanently removed.",
+    "welcome_back": "If you\u2019d like a new website in the future, you\u2019re always welcome back. Get in touch and we\u2019ll help you!"
+  },
+
+  "payment_method_added": {
+    "subject": "Payment method added \u2014 {business_name}",
+    "heading": "Payment method added!",
+    "greeting": "Hi {name},",
+    "body": "A payment method has been added to the website for {business_name}. Your website is now secured and will continue to be available.",
+    "info": "You can change your payment method or view your billing at any time in the dashboard.",
+    "cta": "Go to dashboard"
+  },
+
+  "ticket_created": {
+    "subject": "We\u2019ve received your ticket \u2014 Qvicko",
+    "heading": "We\u2019ve received your ticket",
+    "greeting": "Hi {name},",
+    "body": "Thank you for contacting us! We\u2019ve received your ticket and will get back to you as soon as possible.",
+    "subject_label": "Subject:",
+    "follow_status": "You can follow the status of your ticket in your dashboard.",
+    "cta": "View your tickets",
+    "response_time": "We typically respond within 24 hours."
+  },
+
+  "ticket_replied": {
+    "subject": "New reply on your ticket \u2014 {ticket_subject}",
+    "heading": "You\u2019ve received a reply",
+    "greeting": "Hi {name},",
+    "body": "We\u2019ve replied to your ticket \u201c{ticket_subject}\u201d.",
+    "cta": "View your ticket",
+    "conversation_note": "You can read the full conversation in your dashboard."
+  },
+
+  "ticket_status": {
+    "subject": "Your ticket has been updated \u2014 {ticket_subject}",
+    "heading": "Your ticket has been updated",
+    "greeting": "Hi {name},",
+    "body": "Your ticket \u201c{ticket_subject}\u201d has been {status_text}.",
+    "cta": "View your ticket",
+    "status_labels": {
+      "IN_PROGRESS": "started",
+      "RESOLVED": "resolved",
+      "CLOSED": "closed"
+    }
+  },
+
+  "site_deletion_confirm": {
+    "subject": "Confirm deletion of {site_name}",
+    "heading": "Confirm deletion",
+    "body": "You have requested to delete the website {site_name}.",
+    "warning": "This action cannot be undone. The website will be hidden from all visitors and all connected domains will be removed. Click the button below to confirm the deletion. The link is valid for 24\u00a0hours.",
+    "cta": "Confirm deletion",
+    "ignore": "If you didn\u2019t request this deletion, you can safely ignore this message."
+  }
+}

@@ -25,6 +25,7 @@ from app.sites.graphql_types import (
     AdminSiteListType,
     AdminSiteType,
     AssignDomainInput,
+    CreateIndustryInput,
     CreateLeadInput,
     CustomDomainType,
     DailyVisitorPoint,
@@ -37,6 +38,7 @@ from app.sites.graphql_types import (
     InboundEmailFilterInput,
     InboundEmailListType,
     InboundEmailType,
+    IndustryType,
     LeadFilterInput,
     LeadListType,
     LeadType,
@@ -49,6 +51,7 @@ from app.sites.graphql_types import (
     SmartleadMessageType,
     SubdomainInfoType,
     SiteVersionType,
+    UpdateIndustryInput,
     UpdateSiteDataInput,
 )
 from app.sites.models import (
@@ -58,6 +61,7 @@ from app.sites.models import (
     DomainStatus,
     GeneratedSite,
     InboundEmail,
+    Industry,
     Lead,
     LeadStatus,
     OutreachEmail,
@@ -151,6 +155,7 @@ def _site_to_gql(s: GeneratedSite, lead: Lead | None = None) -> GeneratedSiteTyp
         tokens_used=s.tokens_used,
         ai_model=s.ai_model,
         generation_cost_usd=s.generation_cost_usd,
+        video_url=s.video_url,
         published_at=s.published_at,
         purchased_at=s.purchased_at,
         created_at=s.created_at,
@@ -181,6 +186,9 @@ def _email_to_gql(e: OutreachEmail) -> OutreachEmailType:
 
 def _lead_to_gql(lead: Lead) -> LeadType:
     inbound = lead.inbound_emails if lead.inbound_emails else []
+    industry_name = None
+    if lead.industry_rel:
+        industry_name = lead.industry_rel.name
     return LeadType(
         id=lead.id,
         business_name=lead.business_name,
@@ -189,6 +197,8 @@ def _lead_to_gql(lead: Lead) -> LeadType:
         phone=lead.phone,
         address=lead.address,
         industry=lead.industry,
+        industry_id=lead.industry_id,
+        industry_name=industry_name,
         source=lead.source,
         status=lead.status.value,
         quality_score=lead.quality_score,
@@ -604,6 +614,26 @@ class SiteQuery:
             )
 
     @strawberry.field
+    async def industries(self, info: Info) -> list[IndustryType]:
+        """List all available industries."""
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(Industry).order_by(Industry.name)
+            )
+            industries = result.scalars().all()
+            return [
+                IndustryType(
+                    id=i.id,
+                    name=i.name,
+                    slug=i.slug,
+                    description=i.description,
+                    created_at=i.created_at,
+                    updated_at=i.updated_at,
+                )
+                for i in industries
+            ]
+
+    @strawberry.field
     async def lead(self, info: Info, id: str) -> LeadType | None:
         """Get a single lead by ID (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
@@ -616,6 +646,7 @@ class SiteQuery:
                     selectinload(Lead.generated_site),
                     selectinload(Lead.outreach_emails),
                     selectinload(Lead.inbound_emails),
+                    selectinload(Lead.industry_rel),
                 )
             )
             lead = result.scalar_one_or_none()
@@ -634,11 +665,14 @@ class SiteQuery:
                 selectinload(Lead.generated_site),
                 selectinload(Lead.outreach_emails),
                 selectinload(Lead.inbound_emails),
+                selectinload(Lead.industry_rel),
             )
 
             if f.status:
                 query = query.where(Lead.status == LeadStatus(f.status))
-            if f.industry:
+            if f.industry_id:
+                query = query.where(Lead.industry_id == f.industry_id)
+            elif f.industry:
                 query = query.where(Lead.industry == f.industry)
             if f.search:
                 search = f"%{f.search}%"
@@ -1076,6 +1110,12 @@ class SiteMutation:
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
 
+        # Validate URL format
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if not parsed.netloc or "." not in parsed.netloc:
+            raise ValueError("Invalid website URL: must be a valid domain (e.g. example.com)")
+
         async with get_db_session() as db:
             # Check for duplicate
             existing = await db.execute(
@@ -1088,6 +1128,7 @@ class SiteMutation:
                 website_url=url,
                 business_name=input.business_name,
                 industry=input.industry,
+                industry_id=input.industry_id,
                 source="manual",
                 status=LeadStatus.NEW,
                 created_by=user.id,
@@ -1103,6 +1144,16 @@ class SiteMutation:
             # Trigger pipeline in background
             asyncio.create_task(_run_pipeline_bg(lead_id))
 
+            # Resolve industry name if set
+            industry_name = None
+            if lead.industry_id:
+                ind_result = await db.execute(
+                    select(Industry).where(Industry.id == lead.industry_id)
+                )
+                ind = ind_result.scalar_one_or_none()
+                if ind:
+                    industry_name = ind.name
+
             # Return directly — lead was just created so relationships are empty;
             # accessing them would trigger lazy loads outside the session.
             return LeadType(
@@ -1113,6 +1164,8 @@ class SiteMutation:
                 phone=lead.phone,
                 address=lead.address,
                 industry=lead.industry,
+                industry_id=lead.industry_id,
+                industry_name=industry_name,
                 source=lead.source,
                 status=lead.status.value,
                 quality_score=lead.quality_score,
@@ -1139,6 +1192,33 @@ class SiteMutation:
                 raise ValueError("Lead not found")
 
         asyncio.create_task(_run_pipeline_bg(lead_id))
+        return True
+
+    @strawberry.mutation
+    async def generate_video(self, info: Info, lead_id: str) -> bool:
+        """Generate a before/after video for a lead (superadmin only).
+
+        Runs in the background — poll the lead to check for video_url on the site.
+        """
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(Lead)
+                .where(Lead.id == lead_id)
+                .options(selectinload(Lead.generated_site))
+            )
+            lead = result.scalar_one_or_none()
+            if not lead:
+                raise ValueError("Lead not found")
+            if not lead.generated_site:
+                raise ValueError("Lead has no generated site yet")
+
+            site_id = lead.generated_site.id
+            original_url = lead.website_url
+            business_name = lead.business_name
+
+        asyncio.create_task(_generate_video_bg(lead_id, site_id, original_url, business_name))
         return True
 
     @strawberry.mutation
@@ -1181,6 +1261,7 @@ class SiteMutation:
                     selectinload(Lead.generated_site),
                     selectinload(Lead.outreach_emails),
                     selectinload(Lead.inbound_emails),
+                    selectinload(Lead.industry_rel),
                 )
             )
             lead = result.scalar_one_or_none()
@@ -1225,6 +1306,99 @@ class SiteMutation:
 
             await cache.delete("admin:dashboard_stats")
             await cache.delete("sites:published")
+            return True
+
+    # ── Industry CRUD ──────────────────────────────────────────────────
+
+    @strawberry.mutation
+    async def create_industry(self, info: Info, input: CreateIndustryInput) -> IndustryType:
+        """Create a new industry category (superadmin only)."""
+        import re
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        name = input.name.strip()
+        if not name:
+            raise ValueError("Industry name is required")
+
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+        async with get_db_session() as db:
+            existing = await db.execute(
+                select(Industry).where(
+                    (Industry.slug == slug) | (Industry.name == name)
+                )
+            )
+            if existing.scalar_one_or_none():
+                raise ValueError(f"Industry '{name}' already exists")
+
+            industry = Industry(
+                name=name,
+                slug=slug,
+                description=input.description,
+            )
+            db.add(industry)
+            await db.commit()
+            await db.refresh(industry)
+
+            return IndustryType(
+                id=industry.id,
+                name=industry.name,
+                slug=industry.slug,
+                description=industry.description,
+                created_at=industry.created_at,
+                updated_at=industry.updated_at,
+            )
+
+    @strawberry.mutation
+    async def update_industry(self, info: Info, input: UpdateIndustryInput) -> IndustryType:
+        """Update an industry category (superadmin only)."""
+        import re
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(Industry).where(Industry.id == input.id)
+            )
+            industry = result.scalar_one_or_none()
+            if not industry:
+                raise ValueError("Industry not found")
+
+            if input.name is not None:
+                name = input.name.strip()
+                if not name:
+                    raise ValueError("Industry name cannot be empty")
+                industry.name = name
+                industry.slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+            if input.description is not None:
+                industry.description = input.description
+
+            await db.commit()
+            await db.refresh(industry)
+
+            return IndustryType(
+                id=industry.id,
+                name=industry.name,
+                slug=industry.slug,
+                description=industry.description,
+                created_at=industry.created_at,
+                updated_at=industry.updated_at,
+            )
+
+    @strawberry.mutation
+    async def delete_industry(self, info: Info, industry_id: str) -> bool:
+        """Delete an industry category (superadmin only). Leads keep their industry_id nulled."""
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(Industry).where(Industry.id == industry_id)
+            )
+            industry = result.scalar_one_or_none()
+            if not industry:
+                raise ValueError("Industry not found")
+
+            await db.delete(industry)
+            await db.commit()
             return True
 
     @strawberry.mutation
@@ -2172,12 +2346,13 @@ class SiteMutation:
                 from app.email.service import _send_via_resend
                 from app.email.templates import build_site_deletion_email
                 site_name = site.lead.business_name if site.lead else "Din hemsida"
-                html = build_site_deletion_email(site_name, raw_token)
+                from app.config import settings
+                subject, html, text = build_site_deletion_email(site_name, raw_token, frontend_url=settings.FRONTEND_URL, locale=user.locale)
                 await _send_via_resend(
                     to=user.email,
-                    subject=f"Bekräfta radering av {site_name}",
+                    subject=subject,
                     html=html,
-                    text=f"Bekräfta radering av {site_name}. Klicka på länken i HTML-versionen av detta e-postmeddelande.",
+                    text=text,
                 )
             except Exception:
                 logger.warning("Failed to send deletion confirmation email to %s", user.email)
@@ -2497,6 +2672,33 @@ async def _run_pipeline_bg(lead_id: str) -> None:
             await db.commit()
     except Exception:
         logger.exception("Background pipeline failed for lead %s", lead_id)
+
+
+async def _generate_video_bg(
+    lead_id: str,
+    site_id: str,
+    original_url: str,
+    business_name: str | None,
+) -> None:
+    """Generate a before/after video in the background."""
+    from app.video.service import generate_before_after_video
+    try:
+        video_url = await generate_before_after_video(
+            original_url=original_url,
+            generated_site_id=site_id,
+            business_name=business_name,
+        )
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(GeneratedSite).where(GeneratedSite.id == site_id)
+            )
+            site = result.scalar_one_or_none()
+            if site:
+                site.video_url = video_url
+                await db.commit()
+        logger.info("Video generated for lead %s: %s", lead_id, video_url)
+    except Exception:
+        logger.exception("Background video generation failed for lead %s", lead_id)
 
 
 async def _revalidate_viewer(site_id: str, subdomain: str | None) -> None:

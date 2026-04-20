@@ -225,6 +225,7 @@ async def get_claim_info(token: str, db: AsyncSession = Depends(get_db)) -> dict
         "description": meta.get("description", ""),
         "created_at": site.created_at.isoformat() if site.created_at else None,
         "colors": branding.get("colors", {}),
+        "video_url": site.video_url,
     }
 
 
@@ -870,11 +871,13 @@ async def submit_contact(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Site not found")
 
+    import html as _html
+
     contact_msg = ContactMessage(
         site_id=site_id,
-        name=payload.name.strip(),
+        name=_html.escape(payload.name.strip()),
         email=payload.email.strip(),
-        message=payload.message.strip(),
+        message=_html.escape(payload.message.strip()),
     )
     db.add(contact_msg)
     await db.commit()
@@ -911,7 +914,10 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)) -
         if not hmac.compare_digest(sig_to_check, expected_b64):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
     await process_resend_webhook(db, payload)
     return {"ok": True}
 
@@ -942,7 +948,10 @@ async def resend_inbound_webhook(
         if not hmac.compare_digest(sig_to_check, expected_b64):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     from app.email.inbound import process_inbound_email
     await process_inbound_email(db, payload)

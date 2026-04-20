@@ -100,6 +100,7 @@ async def register(
         company_name=body.company_name,
         org_number=body.org_number,
         phone=body.phone,
+        locale=body.locale,
     )
 
     ip = get_client_ip(request)
@@ -114,7 +115,7 @@ async def register(
     try:
         verification_token = await create_email_verification_token(db, user)
         verify_url = f"{settings.FRONTEND_URL}/verify-email?token={verification_token}"
-        subject, html, text = build_verification_email(verify_url, user.full_name or "användare")
+        subject, html, text = build_verification_email(verify_url, user.full_name, locale=user.locale)
         await _send_via_resend(user.email, subject, html, text)
         email_sent = True
     except Exception:
@@ -441,7 +442,7 @@ async def forgot_password(
     if user and user.is_active:
         raw_token = await create_password_reset_token(db, user)
         reset_url = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
-        subject, html, text = build_password_reset_email(reset_url, user.full_name or "användare")
+        subject, html, text = build_password_reset_email(reset_url, user.full_name, locale=user.locale)
         try:
             await _send_via_resend(user.email, subject, html, text)
         except Exception:
@@ -497,7 +498,7 @@ async def send_verification(
 
     raw_token = await create_email_verification_token(db, current_user)
     verify_url = f"{settings.FRONTEND_URL}/verify-email?token={raw_token}"
-    subject, html, text = build_verification_email(verify_url, current_user.full_name or "användare")
+    subject, html, text = build_verification_email(verify_url, current_user.full_name, locale=current_user.locale)
     await _send_via_resend(current_user.email, subject, html, text)
     await log_audit_event(
         db, AuditEventType.EMAIL_VERIFICATION_SENT, current_user.id,

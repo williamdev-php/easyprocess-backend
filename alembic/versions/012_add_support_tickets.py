@@ -51,8 +51,27 @@ def upgrade() -> None:
     # --- Add deleted_at to users for soft delete ---
     op.add_column("users", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True), schema=SCHEMA)
 
+    # --- Notifications ---
+    op.create_table(
+        "notifications",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("type", sa.Enum("TICKET_CREATED", "TICKET_REPLIED", "TICKET_STATUS_CHANGED", name="notificationtype", schema=SCHEMA), nullable=False),
+        sa.Column("title", sa.String(255), nullable=False),
+        sa.Column("body", sa.Text, nullable=True),
+        sa.Column("link", sa.String(500), nullable=True),
+        sa.Column("is_read", sa.Boolean, nullable=False, server_default="false"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        schema=SCHEMA,
+    )
+    op.create_index("idx_notifications_user_id", "notifications", ["user_id"], schema=SCHEMA)
+    op.create_index("idx_notifications_user_unread", "notifications", ["user_id", "is_read"], schema=SCHEMA)
+    op.create_index("idx_notifications_created_at", "notifications", ["created_at"], schema=SCHEMA)
+
 
 def downgrade() -> None:
+    op.drop_table("notifications", schema=SCHEMA)
+    op.execute(f"DROP TYPE IF EXISTS {SCHEMA}.notificationtype")
     op.drop_column("users", "deleted_at", schema=SCHEMA)
     op.drop_table("superuser_promotions", schema=SCHEMA)
     op.drop_table("support_tickets", schema=SCHEMA)

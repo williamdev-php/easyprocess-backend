@@ -23,6 +23,7 @@ class UserRegister(BaseModel):
     company_name: str | None = Field(None, max_length=255)
     org_number: str | None = Field(None, max_length=50)
     phone: str | None = Field(None, max_length=50)
+    locale: str | None = Field(None, max_length=10)
 
     @field_validator("password")
     @classmethod

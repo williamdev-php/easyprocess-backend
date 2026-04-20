@@ -7,6 +7,7 @@ from strawberry.extensions import SchemaExtension
 from strawberry.fastapi import GraphQLRouter
 
 from app.auth.resolvers import Mutation as AuthMutation, Query as AuthQuery
+from app.billing.admin_subscriptions_resolvers import AdminSubscriptionQuery
 from app.billing.resolvers import BillingMutation, BillingQuery
 from app.billing.revenue_resolvers import RevenueQuery
 from app.media.resolvers import MediaMutation, MediaQuery
@@ -68,7 +69,7 @@ class GraphQLRateLimitExtension(SchemaExtension):
 
 
 @strawberry.type
-class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery, RevenueQuery, SupportQuery):
+class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery, RevenueQuery, AdminSubscriptionQuery, SupportQuery):
     pass
 
 

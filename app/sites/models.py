@@ -86,6 +86,34 @@ class EmailStatus(str, enum.Enum):
 # Models
 # ---------------------------------------------------------------------------
 
+class Industry(Base):
+    """Predefined industry/niche category for leads."""
+    __tablename__ = "industries"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    leads: Mapped[list["Lead"]] = relationship("Lead", back_populates="industry_rel")
+
+    __table_args__ = (
+        Index("idx_industries_slug", "slug"),
+        {"schema": SCHEMA},
+    )
+
+
 class Lead(Base):
     __tablename__ = "leads"
 
@@ -98,6 +126,9 @@ class Lead(Base):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    industry_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.industries.id", ondelete="SET NULL"), nullable=True
+    )
     source: Mapped[str] = mapped_column(String(100), nullable=False, default="manual")
 
     status: Mapped[LeadStatus] = mapped_column(
@@ -123,6 +154,7 @@ class Lead(Base):
     )
 
     # Relationships
+    industry_rel: Mapped["Industry | None"] = relationship("Industry", back_populates="leads")
     scraped_data: Mapped["ScrapedData | None"] = relationship(
         "ScrapedData", back_populates="lead", uselist=False, cascade="all, delete-orphan"
     )
@@ -141,6 +173,7 @@ class Lead(Base):
         Index("idx_leads_email", "email"),
         Index("idx_leads_website_url", "website_url"),
         Index("idx_leads_created_by", "created_by"),
+        Index("idx_leads_industry_id", "industry_id"),
         {"schema": SCHEMA},
     )
 
@@ -191,6 +224,10 @@ class GeneratedSite(Base):
     site_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     template: Mapped[str] = mapped_column(String(50), nullable=False, default="default")
 
+    # Viewer version — locks this site to a specific viewer component set.
+    # Defaults to "v1" for backward compatibility with pre-versioning sites.
+    viewer_version: Mapped[str] = mapped_column(String(10), nullable=False, default="v1")
+
     status: Mapped[SiteStatus] = mapped_column(
         Enum(SiteStatus), default=SiteStatus.DRAFT, nullable=False
     )
@@ -202,6 +239,9 @@ class GeneratedSite(Base):
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     generation_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Before/after video URL
+    video_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Claim token for draft ownership transfer
     claim_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)

@@ -1,0 +1,124 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 Qvicko. Alla r\u00e4ttigheter f\u00f6rbeh\u00e5llna.",
+    "default_user_name": "anv\u00e4ndare",
+    "sign_off": "\u2014 Qvicko",
+    "copy_link_prefix": "Eller kopiera denna l\u00e4nk:",
+    "questions_reply": "Har ni fr\u00e5gor? Svara p\u00e5 detta mail s\u00e5 hj\u00e4lper vi er.",
+    "ignore_if_not_requested": "Om du inte beg\u00e4rde detta kan du ignorera detta meddelande."
+  },
+
+  "password_reset": {
+    "subject": "\u00c5terst\u00e4ll ditt l\u00f6senord \u2014 Qvicko",
+    "heading": "\u00c5terst\u00e4ll ditt l\u00f6senord",
+    "greeting": "Hej {name},",
+    "body": "Vi har f\u00e5tt en beg\u00e4ran om att \u00e5terst\u00e4lla l\u00f6senordet f\u00f6r ditt konto. Klicka p\u00e5 knappen nedan f\u00f6r att v\u00e4lja ett nytt l\u00f6senord. L\u00e4nken \u00e4r giltig i 30\u00a0minuter.",
+    "cta": "\u00c5terst\u00e4ll l\u00f6senord"
+  },
+
+  "verification": {
+    "subject": "Verifiera din e-postadress \u2014 Qvicko",
+    "heading": "Verifiera din e-postadress",
+    "greeting": "Hej {name},",
+    "body": "Tack f\u00f6r att du skapade ett konto hos Qvicko! Klicka p\u00e5 knappen nedan f\u00f6r att verifiera din e-postadress och aktivera ditt konto. L\u00e4nken \u00e4r giltig i 24\u00a0timmar.",
+    "cta": "Verifiera e-post",
+    "ignore": "Om du inte skapade ett konto kan du ignorera detta meddelande."
+  },
+
+  "site_published": {
+    "subject": "Er hemsida \u00e4r live \u2014 {business_name}",
+    "heading": "Er hemsida \u00e4r live!",
+    "greeting": "Hej {name},",
+    "body": "Grattis! Hemsidan f\u00f6r {business_name} \u00e4r nu publicerad och tillg\u00e4nglig f\u00f6r bes\u00f6kare.",
+    "trial_info": "Gratis i 30 dagar \u2014 er hemsida \u00e4r kostnadsfri de f\u00f6rsta 30 dagarna. F\u00f6r att beh\u00e5lla den efter det beh\u00f6ver ni koppla en betalningsmetod. Om ingen betalning registreras tas hemsidan bort efter 45 dagar.",
+    "cta": "Bes\u00f6k er hemsida",
+    "dashboard_text": "Logga in p\u00e5 {link_start}ert konto{link_end} f\u00f6r att hantera hemsidan, koppla en egen dom\u00e4n eller l\u00e4gga till en betalningsmetod."
+  },
+
+  "trial_ending": {
+    "subject": "Er gratis period g\u00e5r ut om {days_left} dagar \u2014 {business_name}",
+    "heading": "Er gratis period g\u00e5r snart ut",
+    "greeting": "Hej {name},",
+    "body": "Den kostnadsfria perioden f\u00f6r {business_name} g\u00e5r ut om {days_left}\u00a0dagar. F\u00f6r att er hemsida ska forts\u00e4tta vara tillg\u00e4nglig beh\u00f6ver ni koppla en betalningsmetod.",
+    "info": "Om ingen betalningsmetod kopplas inom 30 dagar fr\u00e5n publiceringen pausas hemsidan. Efter ytterligare 15 dagar raderas den permanent.",
+    "cta": "Koppla betalningsmetod"
+  },
+
+  "site_paused": {
+    "subject": "Er hemsida har pausats \u2014 {business_name}",
+    "heading": "Er hemsida har pausats",
+    "greeting": "Hej {name},",
+    "body": "Den kostnadsfria perioden f\u00f6r {business_name} har g\u00e5tt ut. Er hemsida \u00e4r inte l\u00e4ngre synlig f\u00f6r bes\u00f6kare.",
+    "info": "Hemsidan raderas om {days_until_deletion} dagar. Koppla en betalningsmetod innan dess f\u00f6r att \u00e5teraktivera den.",
+    "cta": "Koppla betalningsmetod"
+  },
+
+  "site_deletion_warning": {
+    "subject": "Sista chansen \u2014 er hemsida raderas om {days_until_deletion} dagar",
+    "heading": "Er hemsida raderas snart",
+    "greeting": "Hej {name},",
+    "body": "Hemsidan f\u00f6r {business_name} kommer att raderas permanent om {days_until_deletion}\u00a0dagar om ingen betalningsmetod kopplas.",
+    "warning": "Detta g\u00e5r inte att \u00e5ngra. N\u00e4r hemsidan \u00e4r raderad f\u00f6rsvinner allt inneh\u00e5ll, dom\u00e4nkopplingar och statistik.",
+    "cta": "Koppla betalningsmetod nu"
+  },
+
+  "site_deleted": {
+    "subject": "Er hemsida har raderats \u2014 {business_name}",
+    "heading": "Er hemsida har raderats",
+    "greeting": "Hej {name},",
+    "body": "Hemsidan f\u00f6r {business_name} har nu raderats d\u00e5 ingen betalningsmetod kopplades inom tidsfristen.",
+    "content_removed": "Allt inneh\u00e5ll, dom\u00e4nkopplingar och statistik har tagits bort permanent.",
+    "welcome_back": "Om ni vill ha en ny hemsida i framtiden \u00e4r ni varmt v\u00e4lkomna tillbaka. H\u00f6r av er s\u00e5 hj\u00e4lper vi er!"
+  },
+
+  "payment_method_added": {
+    "subject": "Betalningsmetod kopplad \u2014 {business_name}",
+    "heading": "Betalningsmetod kopplad!",
+    "greeting": "Hej {name},",
+    "body": "En betalningsmetod har kopplats till hemsidan f\u00f6r {business_name}. Er hemsida \u00e4r nu s\u00e4krad och kommer att forts\u00e4tta vara tillg\u00e4nglig.",
+    "info": "Ni kan n\u00e4r som helst \u00e4ndra betalningsmetod eller se er fakturering i kontrollpanelen.",
+    "cta": "G\u00e5 till kontrollpanelen"
+  },
+
+  "ticket_created": {
+    "subject": "Vi har tagit emot ditt \u00e4rende \u2014 Qvicko",
+    "heading": "Vi har tagit emot ditt \u00e4rende",
+    "greeting": "Hej {name},",
+    "body": "Tack f\u00f6r att du kontaktade oss! Vi har tagit emot ditt \u00e4rende och kommer att \u00e5terkoppla s\u00e5 snart som m\u00f6jligt.",
+    "subject_label": "\u00c4mne:",
+    "follow_status": "Du kan f\u00f6lja status p\u00e5 ditt \u00e4rende i din kontrollpanel.",
+    "cta": "Se dina \u00e4renden",
+    "response_time": "Vi svarar normalt inom 24 timmar."
+  },
+
+  "ticket_replied": {
+    "subject": "Nytt svar p\u00e5 ditt \u00e4rende \u2014 {ticket_subject}",
+    "heading": "Du har f\u00e5tt ett svar",
+    "greeting": "Hej {name},",
+    "body": "Vi har svarat p\u00e5 ditt \u00e4rende \u201c{ticket_subject}\u201d.",
+    "cta": "Se ditt \u00e4rende",
+    "conversation_note": "Du kan l\u00e4sa hela konversationen i din kontrollpanel."
+  },
+
+  "ticket_status": {
+    "subject": "Ditt \u00e4rende har uppdaterats \u2014 {ticket_subject}",
+    "heading": "Ditt \u00e4rende har uppdaterats",
+    "greeting": "Hej {name},",
+    "body": "Ditt \u00e4rende \u201c{ticket_subject}\u201d har {status_text}.",
+    "cta": "Se ditt \u00e4rende",
+    "status_labels": {
+      "IN_PROGRESS": "p\u00e5b\u00f6rjats",
+      "RESOLVED": "l\u00f6sts",
+      "CLOSED": "st\u00e4ngts"
+    }
+  },
+
+  "site_deletion_confirm": {
+    "subject": "Bekr\u00e4fta radering av {site_name}",
+    "heading": "Bekr\u00e4fta radering",
+    "body": "Du har beg\u00e4rt att radera hemsidan {site_name}.",
+    "warning": "Denna \u00e5tg\u00e4rd kan inte \u00e5ngras. Hemsidan kommer att d\u00f6ljas fr\u00e5n alla bes\u00f6kare och alla kopplade dom\u00e4ner kommer att tas bort. Klicka p\u00e5 knappen nedan f\u00f6r att bekr\u00e4fta raderingen. L\u00e4nken \u00e4r giltig i 24\u00a0timmar.",
+    "cta": "Bekr\u00e4fta radering",
+    "ignore": "Om du inte beg\u00e4rde denna radering kan du ignorera detta meddelande."
+  }
+}

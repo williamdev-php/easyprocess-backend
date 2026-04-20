@@ -4,11 +4,65 @@ Pydantic models defining the complete JSON structure for a generated site.
 Flat schema — each content block is a top-level key.
 If a block is None/null, that section and its corresponding page are disabled.
 Navigation and footer are auto-generated from the data by the viewer.
+
+THIS FILE IS THE SOURCE OF TRUTH FOR THE SITE SCHEMA.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BACKWARD COMPATIBILITY RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After production launch, existing customer sites depend on this schema.
+Breaking changes will corrupt live sites. Follow these rules:
+
+  1. NEW FIELDS MUST BE OPTIONAL with sensible defaults.
+     Example:  badge: str = ""           # OK — old sites get empty string
+     Bad:      badge: str                 # BREAKS — old sites have no value
+
+  2. NEVER REMOVE a field. If deprecated, keep it with a default and ignore
+     it in new viewer versions.
+
+  3. NEVER RENAME a field. Add the new name as an alias or new field instead.
+
+  4. NEVER CHANGE A FIELD'S TYPE. If you need a different type, add a new
+     field (e.g. cta_v2) and let the viewer prefer the new one.
+
+  5. NEW SECTIONS follow the same rule: optional with None default.
+     Example:  pricing: PricingData | None = None
+
+  6. VIEWER VERSION: Each site has a `viewer_version` field that locks it to
+     a specific set of viewer components. New viewer features should target
+     the latest version only. Old versions ignore unknown fields.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When adding, removing, or changing a section/field, update ALL of the following:
+
+  Backend (this project):
+    [x] backend/app/sites/site_schema.py        — Pydantic models (you are here)
+    [ ] backend/app/ai/generator.py             — _VALID_TOP_LEVEL_KEYS (if new top-level key)
+
+  Frontend (dashboard editor):
+    [ ] frontend/.../pages/[id]/page.tsx         — SiteData interface, DEFAULT_SECTION_ORDER, SECTION_MAP
+    [ ] frontend/.../pages/[id]/code/page.tsx    — VALID_SECTION_KEYS, SECTION_RULES, SECTION_FILES
+    [ ] frontend/.../pages/[id]/settings/page.tsx — SiteData interface (only if meta/business/seo changed)
+
+  Viewer (public site renderer):
+    [ ] viewer/lib/types.ts                      — SiteData TypeScript interface
+    [ ] viewer/lib/version-registry.ts           — Register section in version renderer(s)
+    [ ] viewer/components/live-preview-wrapper.tsx — DEFAULT_ORDER, renderSection()
+    [ ] viewer/components/preview-shell.tsx       — DEFAULT_ORDER, renderSection()
+    [ ] viewer/lib/sanitize.ts                   — arrayFields (if new section has a list field)
+    [ ] viewer/lib/navigation.ts                 — buildNavigation() (if section should appear in nav)
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+
+# The viewer version assigned to newly generated sites.
+# Bump this when you release a new viewer design version (v2, v3, ...).
+# Existing sites keep whatever version they were created with.
+CURRENT_VIEWER_VERSION = "v1"
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +268,11 @@ class SiteSchema(BaseModel):
     theme: str = "modern"
     branding: Branding = Branding()
     business: BusinessInfo = BusinessInfo()
+
+    # Viewer version — locks this site to a specific set of viewer components.
+    # Set automatically on generation from CURRENT_VIEWER_VERSION.
+    # Existing sites without this field default to "v1".
+    viewer_version: str = CURRENT_VIEWER_VERSION
 
     # Section display order — list of section keys in desired render order.
     # When absent, the viewer uses the default order.

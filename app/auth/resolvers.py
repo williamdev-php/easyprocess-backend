@@ -215,12 +215,25 @@ class Query:
             )
             site_counts = {str(uid): cnt for uid, cnt in site_counts_result}
 
-            # Get subscription status per user
-            from app.billing.service import get_active_subscription
-            sub_statuses = {}
-            for u in users:
-                sub = await get_active_subscription(db, u.id)
-                sub_statuses[str(u.id)] = sub is not None
+            # Get subscription status per user (batch query instead of N+1)
+            from app.billing.models import Subscription, SubscriptionStatus
+            user_ids = [u.id for u in users]
+            if user_ids:
+                sub_result = await db.execute(
+                    select(Subscription.user_id)
+                    .where(
+                        Subscription.user_id.in_(user_ids),
+                        Subscription.status.in_([
+                            SubscriptionStatus.ACTIVE,
+                            SubscriptionStatus.TRIALING,
+                            SubscriptionStatus.PAST_DUE,
+                        ]),
+                    )
+                )
+                active_sub_user_ids = {str(uid) for uid, in sub_result}
+            else:
+                active_sub_user_ids = set()
+            sub_statuses = {str(u.id): str(u.id) in active_sub_user_ids for u in users}
 
             items = [
                 AdminUserType(

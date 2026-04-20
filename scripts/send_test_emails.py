@@ -57,6 +57,7 @@ async def main():
     print()
 
     DASH = "https://qvicko.com/dashboard"
+    DASH_BILLING = "https://qvicko.com/dashboard/billing"
 
     # 1. Outreach email (plain text style)
     subject, html, text = build_outreach_email(
@@ -102,7 +103,7 @@ async def main():
         user_name="William",
         business_name="Testföretaget AB",
         days_left=5,
-        dashboard_url=DASH,
+        dashboard_url=DASH_BILLING,
     )
     subject = f"[TEST] {subject}"
     msg_id = await send_email(recipient, subject, html, text)
@@ -113,7 +114,7 @@ async def main():
         user_name="William",
         business_name="Testföretaget AB",
         days_until_deletion=15,
-        dashboard_url=DASH,
+        dashboard_url=DASH_BILLING,
     )
     subject = f"[TEST] {subject}"
     msg_id = await send_email(recipient, subject, html, text)
@@ -124,7 +125,7 @@ async def main():
         user_name="William",
         business_name="Testföretaget AB",
         days_until_deletion=3,
-        dashboard_url=DASH,
+        dashboard_url=DASH_BILLING,
     )
     subject = f"[TEST] {subject}"
     msg_id = await send_email(recipient, subject, html, text)
@@ -143,7 +144,7 @@ async def main():
     subject, html, text = build_payment_method_added_email(
         user_name="William",
         business_name="Testföretaget AB",
-        dashboard_url=DASH,
+        dashboard_url=DASH_BILLING,
     )
     subject = f"[TEST] {subject}"
     msg_id = await send_email(recipient, subject, html, text)

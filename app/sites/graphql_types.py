@@ -53,6 +53,16 @@ class EmailStatusGQL(enum.Enum):
 # ---------------------------------------------------------------------------
 
 @strawberry.type
+class IndustryType:
+    id: str
+    name: str
+    slug: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+@strawberry.type
 class ScrapedDataType:
     id: str
     logo_url: str | None = None
@@ -76,6 +86,7 @@ class GeneratedSiteType:
     tokens_used: int | None = None
     ai_model: str | None = None
     generation_cost_usd: float | None = None
+    video_url: str | None = None
     published_at: datetime | None = None
     purchased_at: datetime | None = None
     created_at: datetime
@@ -111,6 +122,8 @@ class LeadType:
     phone: str | None = None
     address: str | None = None
     industry: str | None = None
+    industry_id: str | None = None
+    industry_name: str | None = None
     source: str
     status: str
     quality_score: float | None = None
@@ -163,6 +176,7 @@ class CreateLeadInput:
     website_url: str
     business_name: str | None = None
     industry: str | None = None
+    industry_id: str | None = None
 
     def __post_init__(self) -> None:
         from urllib.parse import urlparse
@@ -205,6 +219,7 @@ class PublishResult:
 class LeadFilterInput:
     status: str | None = None
     industry: str | None = None
+    industry_id: str | None = None
     search: str | None = None
     page: int = 1
     page_size: int = 20
@@ -440,6 +455,19 @@ class AdminSiteFilterInput:
     is_lead_site: bool | None = None
     page: int = 1
     page_size: int = 20
+
+
+@strawberry.input
+class CreateIndustryInput:
+    name: str
+    description: str | None = None
+
+
+@strawberry.input
+class UpdateIndustryInput:
+    id: str
+    name: str | None = None
+    description: str | None = None
 
 
 @strawberry.type

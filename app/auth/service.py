@@ -262,6 +262,7 @@ async def create_user(
     company_name: str | None = None,
     org_number: str | None = None,
     phone: str | None = None,
+    locale: str | None = None,
 ) -> User:
     user = User(
         email=email,
@@ -270,6 +271,7 @@ async def create_user(
         company_name=company_name,
         org_number=org_number,
         phone=phone,
+        locale=locale or "sv",
     )
     db.add(user)
     await db.flush()

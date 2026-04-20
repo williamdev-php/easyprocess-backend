@@ -50,3 +50,4 @@ class AnalyticsOverviewType:
     trial_start_rate: float
     trial_conversion_rate: float
     total_revenue_sek: int
+    avg_session_duration_seconds: float

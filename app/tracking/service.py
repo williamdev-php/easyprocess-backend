@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import func, select, distinct
+from sqlalchemy import cast, func, select, distinct, Float, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.billing.models import Payment
@@ -222,6 +222,9 @@ async def get_analytics_overview(
     trial_start_rate = round(total_trials / total_signups * 100, 1) if total_signups > 0 else 0.0
     trial_conversion_rate = round(total_subs / total_trials * 100, 1) if total_trials > 0 else 0.0
 
+    # Average session duration (from session_end events with duration_seconds metadata)
+    avg_duration = await get_avg_session_duration(db, start_date, end_date)
+
     return {
         "unique_visitors": unique_visitors,
         "total_signups": total_signups,
@@ -230,4 +233,30 @@ async def get_analytics_overview(
         "trial_start_rate": trial_start_rate,
         "trial_conversion_rate": trial_conversion_rate,
         "total_revenue_sek": total_revenue,
+        "avg_session_duration_seconds": avg_duration,
     }
+
+
+# ---------------------------------------------------------------------------
+# Session duration
+# ---------------------------------------------------------------------------
+
+async def get_avg_session_duration(
+    db: AsyncSession,
+    start_date: datetime,
+    end_date: datetime,
+) -> float:
+    """Return average session duration in seconds from session_end events."""
+    # Use PostgreSQL JSON extraction: (metadata->>'duration_seconds')::float
+    duration_expr = cast(
+        TrackingEvent.metadata_["duration_seconds"].as_string(),
+        Float,
+    )
+    q = select(func.avg(duration_expr)).where(
+        TrackingEvent.event_type == "session_end",
+        TrackingEvent.created_at >= start_date,
+        TrackingEvent.created_at <= end_date,
+        TrackingEvent.metadata_.is_not(None),
+    )
+    result = (await db.execute(q)).scalar()
+    return round(float(result), 1) if result else 0.0

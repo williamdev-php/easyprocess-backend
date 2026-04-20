@@ -129,7 +129,7 @@ async def _download_one(url: str, lead_id: str) -> tuple[str | None, tuple[int, 
             return stored_url, dims
 
     except Exception as e:
-        logger.debug("Failed to download image %s: %s", url, e)
+        logger.warning("Failed to download image %s: %s", url, e)
         return None, None
 
 
@@ -168,7 +168,7 @@ async def _download_favicon(url: str, lead_id: str) -> str | None:
             )
             return stored_url
     except Exception as e:
-        logger.debug("Failed to download favicon %s: %s", url, e)
+        logger.warning("Failed to download favicon %s: %s", url, e)
         return None
 
 

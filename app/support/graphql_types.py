@@ -69,3 +69,24 @@ class SupportTicketFilterInput:
     search: str | None = None
     page: int = 1
     page_size: int = 20
+
+
+# ---------------------------------------------------------------------------
+# Notification types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class NotificationType:
+    id: str
+    type: str
+    title: str
+    body: str | None
+    link: str | None
+    is_read: bool
+    created_at: str
+
+
+@strawberry.type
+class NotificationListType:
+    items: list[NotificationType]
+    unread_count: int

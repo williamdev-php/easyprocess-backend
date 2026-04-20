@@ -29,21 +29,44 @@ def upload_file(
     file_name: str,
     content_type: str = "application/octet-stream",
     prefix: str = "uploads",
+    timeout: float = 30.0,
 ) -> str:
-    """Upload a file to Supabase Storage and return its public URL."""
+    """Upload a file to Supabase Storage and return its public URL.
+
+    For large files, pass a higher ``timeout`` (e.g. 120 for videos).
+    Retries once on 5xx errors.
+    """
     key = _make_key(file_name, prefix=prefix)
     bucket = settings.SUPABASE_STORAGE_BUCKET
     url = f"{settings.supabase_storage_url}/object/{bucket}/{key}"
 
-    resp = httpx.post(
-        url,
-        headers={**_headers(), "Content-Type": content_type},
-        content=file_data,
-        timeout=30.0,
-    )
-    resp.raise_for_status()
-
-    return f"{settings.supabase_storage_url}/object/public/{bucket}/{key}"
+    last_err: Exception | None = None
+    for _attempt in range(2):
+        try:
+            resp = httpx.post(
+                url,
+                headers={**_headers(), "Content-Type": content_type},
+                content=file_data,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return f"{settings.supabase_storage_url}/object/public/{bucket}/{key}"
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            if e.response.status_code < 500:
+                raise
+            # 5xx — retry once
+            logging.getLogger(__name__).warning(
+                "Supabase upload 5xx (attempt %d): %s", _attempt + 1, e,
+            )
+            continue
+        except httpx.TimeoutException as e:
+            last_err = e
+            logging.getLogger(__name__).warning(
+                "Supabase upload timeout (attempt %d): %s", _attempt + 1, e,
+            )
+            continue
+    raise last_err  # type: ignore[misc]
 
 
 def delete_file(url: str) -> None:

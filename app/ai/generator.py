@@ -18,7 +18,7 @@ import httpx
 
 from app.ai.prompts import build_prompt
 from app.config import settings
-from app.sites.site_schema import SiteSchema
+from app.sites.site_schema import CURRENT_VIEWER_VERSION, SiteSchema
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ TOTAL_STYLE_VARIANTS = 4  # variants 0, 1, 2, 3
 
 _VALID_TOP_LEVEL_KEYS = {
     "meta", "theme", "branding", "business", "section_order", "style_variant",
+    "viewer_version",
     "hero", "about", "features", "stats", "services", "process",
     "gallery", "team", "testimonials", "faq", "cta", "contact", "seo",
 }
@@ -150,6 +151,9 @@ async def generate_site(
             # Assign a random style variant for visual variety.
             # The AI doesn't control this — it's pure backend randomization.
             site_data["style_variant"] = random.randint(0, TOTAL_STYLE_VARIANTS - 1)
+
+            # Stamp the current viewer version so this site is locked to it.
+            site_data["viewer_version"] = CURRENT_VIEWER_VERSION
 
             site_schema = SiteSchema(**site_data)
 
