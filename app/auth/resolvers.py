@@ -3,10 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import strawberry
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, or_
 from strawberry.types import Info
 
 from app.auth.graphql_types import (
+    AdminUpdateUserInput,
+    AdminUserDetailType,
+    AdminUserFilterInput,
+    AdminUserListType,
+    AdminUserSiteType,
+    AdminUserStatsType,
+    AdminUserType,
     AuditLogType,
     ChangePasswordInput,
     SessionType,
@@ -151,6 +158,246 @@ class Query:
                 for log in logs
             ]
 
+    # ------------------------------------------------------------------
+    # Admin-only queries
+    # ------------------------------------------------------------------
+
+    @strawberry.field
+    async def all_users(self, info: Info, filter: AdminUserFilterInput | None = None) -> AdminUserListType:
+        """List all users (superadmin only)."""
+        user = _require_user(await _get_user_from_info(info))
+        if not user.is_superuser:
+            raise PermissionError("Superuser access required")
+
+        f = filter or AdminUserFilterInput()
+        page_size = min(f.page_size, 50)
+        offset = (f.page - 1) * page_size
+
+        async with get_db_session() as db:
+            query = select(User)
+            count_query = select(func.count()).select_from(User)
+
+            if f.search:
+                pattern = f"%{f.search}%"
+                search_filter = or_(
+                    User.email.ilike(pattern),
+                    User.full_name.ilike(pattern),
+                    User.company_name.ilike(pattern),
+                )
+                query = query.where(search_filter)
+                count_query = count_query.where(search_filter)
+
+            if f.is_active is not None:
+                query = query.where(User.is_active == f.is_active)
+                count_query = count_query.where(User.is_active == f.is_active)
+
+            if f.is_verified is not None:
+                query = query.where(User.is_verified == f.is_verified)
+                count_query = count_query.where(User.is_verified == f.is_verified)
+
+            total_result = await db.execute(count_query)
+            total = total_result.scalar() or 0
+
+            result = await db.execute(
+                query.order_by(User.created_at.desc())
+                .limit(page_size)
+                .offset(offset)
+            )
+            users = result.scalars().all()
+
+            # Get site counts per user
+            from app.sites.models import GeneratedSite, Lead
+            site_counts_result = await db.execute(
+                select(Lead.created_by, func.count(GeneratedSite.id))
+                .join(GeneratedSite, GeneratedSite.lead_id == Lead.id)
+                .where(GeneratedSite.deleted_at.is_(None))
+                .group_by(Lead.created_by)
+            )
+            site_counts = {str(uid): cnt for uid, cnt in site_counts_result}
+
+            # Get subscription status per user
+            from app.billing.service import get_active_subscription
+            sub_statuses = {}
+            for u in users:
+                sub = await get_active_subscription(db, u.id)
+                sub_statuses[str(u.id)] = sub is not None
+
+            items = [
+                AdminUserType(
+                    id=u.id,
+                    email=u.email,
+                    full_name=u.full_name,
+                    company_name=u.company_name,
+                    phone=u.phone,
+                    country=u.billing_country,
+                    avatar_url=u.avatar_url,
+                    role=u.role.value,
+                    is_superuser=u.is_superuser,
+                    is_active=u.is_active,
+                    is_verified=u.is_verified,
+                    created_at=u.created_at,
+                    last_login_at=u.last_login_at,
+                    sites_count=site_counts.get(str(u.id), 0),
+                    has_subscription=sub_statuses.get(str(u.id), False),
+                )
+                for u in users
+            ]
+
+            return AdminUserListType(
+                items=items,
+                total=total,
+                page=f.page,
+                page_size=page_size,
+            )
+
+    @strawberry.field
+    async def admin_user_stats(self, info: Info) -> AdminUserStatsType:
+        """Aggregate user stats (superadmin only)."""
+        user = _require_user(await _get_user_from_info(info))
+        if not user.is_superuser:
+            raise PermissionError("Superuser access required")
+
+        async with get_db_session() as db:
+            total = (await db.execute(select(func.count()).select_from(User))).scalar() or 0
+            active = (await db.execute(
+                select(func.count()).select_from(User).where(User.is_active == True)
+            )).scalar() or 0
+            verified = (await db.execute(
+                select(func.count()).select_from(User).where(User.is_verified == True)
+            )).scalar() or 0
+
+            from datetime import timedelta
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            new_30d = (await db.execute(
+                select(func.count()).select_from(User).where(User.created_at >= thirty_days_ago)
+            )).scalar() or 0
+
+            return AdminUserStatsType(
+                total_users=total,
+                active_users=active,
+                verified_users=verified,
+                users_with_subscription=0,  # Computed on demand if needed
+                new_users_30d=new_30d,
+            )
+
+    @strawberry.field
+    async def admin_user(self, info: Info, id: str) -> AdminUserDetailType:
+        """Get full user details (superadmin only)."""
+        caller = _require_user(await _get_user_from_info(info))
+        if not caller.is_superuser:
+            raise PermissionError("Superuser access required")
+
+        async with get_db_session() as db:
+            target = await get_user_by_id(db, id)
+            if not target:
+                raise ValueError("User not found")
+
+            # Sessions (active only)
+            result = await db.execute(
+                select(Session)
+                .where(
+                    and_(
+                        Session.user_id == id,
+                        Session.revoked_at.is_(None),
+                        Session.expires_at > datetime.now(timezone.utc),
+                    )
+                )
+                .order_by(Session.created_at.desc())
+                .limit(20)
+            )
+            sessions = [
+                SessionType(
+                    id=s.id,
+                    ip_address=s.ip_address,
+                    user_agent=s.user_agent,
+                    created_at=s.created_at,
+                    expires_at=s.expires_at,
+                    is_current=False,
+                )
+                for s in result.scalars().all()
+            ]
+
+            # Audit log (last 50)
+            audit_result = await db.execute(
+                select(AuditLog)
+                .where(AuditLog.user_id == id)
+                .order_by(AuditLog.created_at.desc())
+                .limit(50)
+            )
+            audit_log = [
+                AuditLogType(
+                    id=log.id,
+                    event_type=log.event_type.value,
+                    ip_address=log.ip_address,
+                    user_agent=log.user_agent,
+                    created_at=log.created_at,
+                )
+                for log in audit_result.scalars().all()
+            ]
+
+            # Recent sites
+            from app.sites.models import GeneratedSite, Lead
+            sites_result = await db.execute(
+                select(GeneratedSite, Lead)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(
+                    Lead.created_by == id,
+                    GeneratedSite.deleted_at.is_(None),
+                )
+                .order_by(GeneratedSite.created_at.desc())
+                .limit(10)
+            )
+            recent_sites = [
+                AdminUserSiteType(
+                    id=site.id,
+                    business_name=lead.business_name,
+                    subdomain=site.subdomain,
+                    status=site.status.value,
+                    views=site.views,
+                    created_at=site.created_at,
+                )
+                for site, lead in sites_result.all()
+            ]
+
+            site_count = len(recent_sites)
+
+            # Subscription status
+            from app.billing.service import get_active_subscription
+            sub = await get_active_subscription(db, target.id)
+
+            return AdminUserDetailType(
+                id=target.id,
+                email=target.email,
+                full_name=target.full_name,
+                company_name=target.company_name,
+                org_number=target.org_number,
+                phone=target.phone,
+                country=target.billing_country,
+                avatar_url=target.avatar_url,
+                locale=target.locale,
+                role=target.role.value,
+                is_superuser=target.is_superuser,
+                is_active=target.is_active,
+                is_verified=target.is_verified,
+                two_factor_enabled=target.two_factor_enabled,
+                failed_login_attempts=target.failed_login_attempts,
+                locked_until=target.locked_until,
+                last_login_at=target.last_login_at,
+                password_changed_at=target.password_changed_at,
+                created_at=target.created_at,
+                updated_at=target.updated_at,
+                billing_street=target.billing_street,
+                billing_city=target.billing_city,
+                billing_zip=target.billing_zip,
+                billing_country=target.billing_country,
+                stripe_customer_id=target.stripe_customer_id,
+                sites_count=site_count,
+                has_subscription=sub is not None,
+                sessions=sessions,
+                audit_log=audit_log,
+                recent_sites=recent_sites,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Mutations
@@ -253,3 +500,45 @@ class Mutation:
 
             await db.commit()
             return count
+
+    @strawberry.mutation
+    async def admin_update_user(self, info: Info, input: AdminUpdateUserInput) -> AdminUserDetailType:
+        """Update a user's profile/status (superadmin only)."""
+        caller = _require_user(await _get_user_from_info(info))
+        if not caller.is_superuser:
+            raise PermissionError("Superuser access required")
+
+        async with get_db_session() as db:
+            target = await get_user_by_id(db, input.user_id)
+            if not target:
+                raise ValueError("User not found")
+
+            if input.full_name is not None:
+                target.full_name = input.full_name
+            if input.email is not None:
+                target.email = input.email
+            if input.company_name is not None:
+                target.company_name = input.company_name
+            if input.org_number is not None:
+                target.org_number = input.org_number
+            if input.phone is not None:
+                target.phone = input.phone
+            if input.locale is not None:
+                target.locale = input.locale
+            if input.role is not None:
+                from app.auth.models import UserRole
+                target.role = UserRole(input.role)
+            if input.is_active is not None:
+                target.is_active = input.is_active
+            if input.is_verified is not None:
+                target.is_verified = input.is_verified
+            if input.is_superuser is not None:
+                target.is_superuser = input.is_superuser
+
+            target.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await invalidate_user_cache(target.id, target.email)
+            await db.refresh(target)
+
+        # Re-fetch via the query to return full detail
+        return await Query.admin_user(Query(), info, input.user_id)

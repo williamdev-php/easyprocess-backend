@@ -10,6 +10,7 @@ from app.auth.resolvers import Mutation as AuthMutation, Query as AuthQuery
 from app.billing.resolvers import BillingMutation, BillingQuery
 from app.media.resolvers import MediaMutation, MediaQuery
 from app.sites.resolvers import SiteMutation, SiteQuery
+from app.tracking.resolvers import AnalyticsQuery
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class GraphQLRateLimitExtension(SchemaExtension):
 
 
 @strawberry.type
-class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery):
+class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery):
     pass
 
 

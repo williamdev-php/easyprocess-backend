@@ -33,9 +33,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_redis_url(self) -> str:
-        """Use internal Redis in production, proxy URL in development."""
-        if self.ENVIRONMENT == "production" and self.REDIS_INTERNAL_URL:
-            return self.REDIS_INTERNAL_URL
+        """Always use proxy URL (REDIS_URL). Internal networking is not available."""
         return self.REDIS_URL
 
     # Resend (email)
@@ -85,6 +83,10 @@ class Settings(BaseSettings):
     STRIPE_PRICE_ID: str = ""  # Deprecated — use STRIPE_BASIC_PRICE_ID / STRIPE_PRO_PRICE_ID
     STRIPE_BASIC_PRICE_ID: str = ""
     STRIPE_PRO_PRICE_ID: str = ""
+
+    # Viewer
+    VIEWER_URL: str = "http://localhost:3001"
+    REVALIDATION_SECRET: str = ""
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"

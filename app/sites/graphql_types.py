@@ -400,6 +400,49 @@ class OutreachStatsType:
 
 
 @strawberry.type
+class AdminSiteType:
+    """Site with owner info for admin views."""
+    id: str
+    site_data: JSON
+    template: str
+    status: str
+    subdomain: str | None = None
+    custom_domain: str | None = None
+    views: int = 0
+    tokens_used: int | None = None
+    ai_model: str | None = None
+    generation_cost_usd: float | None = None
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    lead_id: str | None = None
+    business_name: str | None = None
+    website_url: str | None = None
+    # Owner info
+    owner_id: str | None = None
+    owner_email: str | None = None
+    owner_name: str | None = None
+    is_lead_site: bool = False
+
+
+@strawberry.type
+class AdminSiteListType:
+    items: list[AdminSiteType]
+    total: int
+    page: int
+    page_size: int
+
+
+@strawberry.input
+class AdminSiteFilterInput:
+    search: str | None = None
+    status: str | None = None
+    is_lead_site: bool | None = None
+    page: int = 1
+    page_size: int = 20
+
+
+@strawberry.type
 class SmartleadMessageType:
     """A message from Smartlead message history (sent or reply)."""
     id: str

@@ -20,6 +20,7 @@ import app.auth.models  # noqa: F401
 import app.sites.models  # noqa: F401
 import app.billing.models  # noqa: F401
 import app.media.models  # noqa: F401
+import app.tracking.models  # noqa: F401
 
 
 @pytest.fixture(scope="session")

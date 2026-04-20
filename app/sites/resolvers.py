@@ -21,6 +21,9 @@ from app.database import get_db_session
 from app.sites.site_schema import SiteSchema
 from app.sites.graphql_types import (
     AddDomainInput,
+    AdminSiteFilterInput,
+    AdminSiteListType,
+    AdminSiteType,
     AssignDomainInput,
     CreateLeadInput,
     CustomDomainType,
@@ -748,6 +751,95 @@ class SiteQuery:
             }, ttl=60)
 
             return stats
+
+    @strawberry.field
+    async def all_sites(self, info: Info, filter: AdminSiteFilterInput | None = None) -> AdminSiteListType:
+        """List all sites with owner info (superadmin only)."""
+
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
+        f = filter or AdminSiteFilterInput()
+        page_size = min(f.page_size, 50)
+        offset = (f.page - 1) * page_size
+
+        async with get_db_session() as db:
+            from app.auth.models import User as UserModel
+            query = (
+                select(GeneratedSite, Lead, UserModel)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .outerjoin(UserModel, Lead.created_by == UserModel.id)
+                .where(GeneratedSite.deleted_at.is_(None))
+            )
+            count_query = (
+                select(func.count())
+                .select_from(GeneratedSite)
+                .join(Lead, GeneratedSite.lead_id == Lead.id)
+                .where(GeneratedSite.deleted_at.is_(None))
+            )
+
+            if f.search:
+                pattern = f"%{f.search}%"
+                search_filter = or_(
+                    Lead.business_name.ilike(pattern),
+                    Lead.website_url.ilike(pattern),
+                    GeneratedSite.subdomain.ilike(pattern),
+                )
+                query = query.where(search_filter)
+                count_query = count_query.where(search_filter)
+
+            if f.status:
+                query = query.where(GeneratedSite.status == SiteStatus(f.status))
+                count_query = count_query.where(GeneratedSite.status == SiteStatus(f.status))
+
+            if f.is_lead_site is not None:
+                if f.is_lead_site:
+                    # Lead sites: owner is the admin/superuser who created the lead
+                    query = query.where(or_(UserModel.is_superuser == True, UserModel.id.is_(None)))
+                else:
+                    # User sites: owner is a regular user
+                    query = query.where(UserModel.is_superuser == False)
+
+            total_result = await db.execute(count_query)
+            total = total_result.scalar() or 0
+
+            result = await db.execute(
+                query.order_by(GeneratedSite.created_at.desc())
+                .limit(page_size)
+                .offset(offset)
+            )
+            rows = result.all()
+
+            items = [
+                AdminSiteType(
+                    id=site.id,
+                    site_data=site.site_data,
+                    template=site.template,
+                    status=site.status.value,
+                    subdomain=site.subdomain,
+                    custom_domain=site.custom_domain,
+                    views=site.views,
+                    tokens_used=site.tokens_used,
+                    ai_model=site.ai_model,
+                    generation_cost_usd=site.generation_cost_usd,
+                    published_at=site.published_at,
+                    created_at=site.created_at,
+                    updated_at=site.updated_at,
+                    lead_id=site.lead_id,
+                    business_name=lead.business_name,
+                    website_url=lead.website_url,
+                    owner_id=str(owner.id) if owner else None,
+                    owner_email=owner.email if owner else None,
+                    owner_name=owner.full_name if owner else None,
+                    is_lead_site=owner is None or owner.is_superuser if owner else True,
+                )
+                for site, lead, owner in rows
+            ]
+
+            return AdminSiteListType(
+                items=items,
+                total=total,
+                page=f.page,
+                page_size=page_size,
+            )
 
     @strawberry.field
     async def site(self, info: Info, id: str) -> GeneratedSiteType | None:
@@ -2412,12 +2504,16 @@ async def _revalidate_viewer(site_id: str, subdomain: str | None) -> None:
     import httpx
     from app.config import settings
 
-    viewer_url = getattr(settings, "VIEWER_URL", None) or "http://localhost:3001"
+    viewer_url = settings.VIEWER_URL or "http://localhost:3001"
+    secret = settings.REVALIDATION_SECRET
     paths = [f"/preview/{site_id}", f"/{site_id}"]
 
     async with httpx.AsyncClient(timeout=5) as client:
         for path in paths:
             try:
-                await client.get(f"{viewer_url}/api/revalidate", params={"path": path})
+                await client.get(
+                    f"{viewer_url}/api/revalidate",
+                    params={"path": path, "secret": secret},
+                )
             except Exception:
                 pass  # Best effort — viewer cache has TTL fallback
