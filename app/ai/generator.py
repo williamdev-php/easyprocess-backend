@@ -53,9 +53,11 @@ TOTAL_STYLE_VARIANTS = 4  # variants 0, 1, 2, 3
 
 _VALID_TOP_LEVEL_KEYS = {
     "meta", "theme", "branding", "business", "section_order", "style_variant",
-    "viewer_version",
+    "viewer_version", "section_settings",
     "hero", "about", "features", "stats", "services", "process",
-    "gallery", "team", "testimonials", "faq", "cta", "contact", "seo",
+    "gallery", "team", "testimonials", "faq", "cta", "contact",
+    "pricing", "video", "logo_cloud", "custom_content", "banner",
+    "seo",
 }
 
 
@@ -82,12 +84,21 @@ def _sanitize_ai_output(site_data: dict) -> None:
 
     # Fix null strings in blocks that have required title/subtitle fields
     for block_key in ("stats", "testimonials", "faq", "features", "services",
-                      "gallery", "process", "team", "about"):
+                      "gallery", "process", "team", "about",
+                      "pricing", "video", "logo_cloud", "custom_content"):
         block = site_data.get(block_key)
         if isinstance(block, dict):
             for str_field in ("title", "subtitle"):
                 if str_field in block and block[str_field] is None:
                     block[str_field] = ""
+
+    # Validate section_settings animation values
+    valid_anims = {"fade-up", "fade-in", "slide-left", "slide-right", "scale", "none"}
+    settings = site_data.get("section_settings")
+    if isinstance(settings, dict):
+        for _key, val in settings.items():
+            if isinstance(val, dict) and val.get("animation") not in valid_anims:
+                val["animation"] = "fade-up"
 
 
 async def generate_site(
@@ -106,6 +117,8 @@ async def generate_site(
     visual_analysis: dict | None = None,
     model_override: str | None = None,
     screenshot_bytes: list[dict] | None = None,
+    industry_prompt_hint: str | None = None,
+    industry_default_sections: list[str] | None = None,
 ) -> GenerationResult:
     """
     Generate a complete SiteSchema using an LLM.
@@ -129,6 +142,8 @@ async def generate_site(
         social_links=social_links,
         images=images,
         visual_analysis=visual_analysis,
+        industry_prompt_hint=industry_prompt_hint,
+        industry_default_sections=industry_default_sections,
     )
 
     last_error = None

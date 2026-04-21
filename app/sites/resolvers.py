@@ -627,6 +627,8 @@ class SiteQuery:
                     name=i.name,
                     slug=i.slug,
                     description=i.description,
+                    prompt_hint=i.prompt_hint,
+                    default_sections=i.default_sections,
                     created_at=i.created_at,
                     updated_at=i.updated_at,
                 )
@@ -1335,6 +1337,8 @@ class SiteMutation:
                 name=name,
                 slug=slug,
                 description=input.description,
+                prompt_hint=input.prompt_hint,
+                default_sections=input.default_sections,
             )
             db.add(industry)
             await db.commit()
@@ -1345,6 +1349,8 @@ class SiteMutation:
                 name=industry.name,
                 slug=industry.slug,
                 description=industry.description,
+                prompt_hint=industry.prompt_hint,
+                default_sections=industry.default_sections,
                 created_at=industry.created_at,
                 updated_at=industry.updated_at,
             )
@@ -1371,6 +1377,10 @@ class SiteMutation:
                 industry.slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
             if input.description is not None:
                 industry.description = input.description
+            if input.prompt_hint is not None:
+                industry.prompt_hint = input.prompt_hint
+            if input.default_sections is not None:
+                industry.default_sections = input.default_sections
 
             await db.commit()
             await db.refresh(industry)
@@ -1380,6 +1390,8 @@ class SiteMutation:
                 name=industry.name,
                 slug=industry.slug,
                 description=industry.description,
+                prompt_hint=industry.prompt_hint,
+                default_sections=industry.default_sections,
                 created_at=industry.created_at,
                 updated_at=industry.updated_at,
             )

@@ -27,10 +27,27 @@ from app.rate_limit import limiter
 from app.sites.migration import normalize_site_data
 from app.auth.dependencies import get_current_user, get_optional_user
 from app.auth.models import User
-from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Lead, LeadStatus, PageView, SiteStatus
+from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Industry, Lead, LeadStatus, PageView, SiteStatus
 from app.sites.site_schema import SiteSchema
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
+
+
+# ---------------------------------------------------------------------------
+# Public: List industries (for create-site dropdown)
+# ---------------------------------------------------------------------------
+
+@router.get("/industries")
+async def list_industries(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """List all industries for the create-site dropdown."""
+    result = await db.execute(
+        select(Industry).order_by(Industry.name)
+    )
+    industries = result.scalars().all()
+    return [
+        {"id": ind.id, "name": ind.name, "slug": ind.slug}
+        for ind in industries
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -372,10 +389,13 @@ class CreateSitePayload(BaseModel):
     """Create a brand-new site from scratch using AI generation."""
     business_name: str = Field(min_length=1, max_length=255)
     industry: str | None = None
+    industry_id: str | None = None  # FK to industries table for prompt_hint lookup
     context: str = Field(default="", max_length=2000)
     colors: dict | None = None  # {primary, secondary, accent, background, text}
     logo_url: str | None = None
     email: str | None = None  # user's contact email for the site
+    image_urls: list[str] | None = Field(None, max_length=12)  # up to 12 user-uploaded images
+    font: str | None = Field(None, max_length=100)  # Google Font name for the site
 
 
 class CreateSiteFromUrlPayload(BaseModel):
@@ -430,6 +450,21 @@ async def create_site_direct(
     # Use provided colors or None (AI will generate)
     colors = payload.colors
 
+    # Look up industry prompt_hint from DB if industry_id provided
+    industry_prompt_hint: str | None = None
+    industry_default_sections: list[str] | None = None
+    industry_name = payload.industry
+    if payload.industry_id:
+        result = await db.execute(
+            select(Industry).where(Industry.id == payload.industry_id)
+        )
+        ind = result.scalar_one_or_none()
+        if ind:
+            industry_prompt_hint = ind.prompt_hint
+            industry_default_sections = ind.default_sections
+            if not industry_name:
+                industry_name = ind.name
+
     # Run generation in background
     import asyncio
 
@@ -439,7 +474,7 @@ async def create_site_direct(
             try:
                 gen_result = await generate_site(
                     business_name=payload.business_name,
-                    industry=payload.industry,
+                    industry=industry_name,
                     website_url="",
                     email=payload.email,
                     phone=None,
@@ -449,11 +484,27 @@ async def create_site_direct(
                     services=None,
                     logo_url=payload.logo_url,
                     social_links=None,
-                    images=None,
+                    images=payload.image_urls,
                     visual_analysis=None,
+                    industry_prompt_hint=industry_prompt_hint,
+                    industry_default_sections=industry_default_sections,
                 )
 
                 site_data = gen_result.site_schema.model_dump(mode="json")
+
+                # Apply user-selected font, or pick a safe default
+                import random as _random
+                _safe_fonts = [
+                    "Inter", "Poppins", "DM Sans", "Outfit",
+                    "Plus Jakarta Sans", "Manrope", "Work Sans", "Lato",
+                ]
+                chosen_font = payload.font or _random.choice(_safe_fonts)
+                if "branding" not in site_data or site_data["branding"] is None:
+                    site_data["branding"] = {}
+                if "fonts" not in site_data["branding"] or site_data["branding"]["fonts"] is None:
+                    site_data["branding"]["fonts"] = {}
+                site_data["branding"]["fonts"]["body"] = chosen_font
+                site_data["branding"]["fonts"]["heading"] = chosen_font
 
                 subdomain = await generate_unique_subdomain(
                     bg_db, payload.business_name, None
@@ -618,11 +669,24 @@ async def get_site(site_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     if not site or site.status == SiteStatus.ARCHIVED:
         raise HTTPException(status_code=404, detail="Site not found")
 
+    # Fetch installed apps for this site
+    from app.apps.models import App as AppModel, AppInstallation as AppInstModel
+    apps_result = await db.execute(
+        select(AppModel.slug)
+        .join(AppInstModel, AppInstModel.app_id == AppModel.id)
+        .where(
+            AppInstModel.site_id == site_id,
+            AppInstModel.is_active == True,  # noqa: E712
+        )
+    )
+    installed_apps = [row[0] for row in apps_result.all()]
+
     response: dict = {
         "id": site.id,
         "site_data": normalize_site_data(site.site_data or {}),
         "template": site.template,
         "status": site.status.value,
+        "installed_apps": installed_apps,
     }
 
     # Include draft claim info so the viewer can show a banner
@@ -667,6 +731,7 @@ async def get_site_meta(site_id: str, db: AsyncSession = Depends(get_db)) -> dic
         "business_name": business.get("name", ""),
         "structured_data": seo.get("structured_data", {}),
         "robots": seo.get("robots", "index, follow"),
+        "head_scripts": site_data.get("head_scripts"),
     }
 
     if site.status == SiteStatus.PUBLISHED:

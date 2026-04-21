@@ -14,6 +14,7 @@ from app.media.resolvers import MediaMutation, MediaQuery
 from app.sites.resolvers import SiteMutation, SiteQuery
 from app.support.resolvers import SupportMutation, SupportQuery
 from app.tracking.resolvers import AnalyticsQuery
+from app.apps.resolvers import Mutation as AppMutation, Query as AppQuery
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,12 @@ class GraphQLRateLimitExtension(SchemaExtension):
 
 
 @strawberry.type
-class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery, RevenueQuery, AdminSubscriptionQuery, SupportQuery):
+class Query(AuthQuery, SiteQuery, BillingQuery, MediaQuery, AnalyticsQuery, RevenueQuery, AdminSubscriptionQuery, SupportQuery, AppQuery):
     pass
 
 
 @strawberry.type
-class Mutation(AuthMutation, SiteMutation, BillingMutation, MediaMutation, SupportMutation):
+class Mutation(AuthMutation, SiteMutation, BillingMutation, MediaMutation, SupportMutation, AppMutation):
     pass
 
 

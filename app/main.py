@@ -25,6 +25,7 @@ from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noq
 from app.tracking.models import TrackingEvent  # noqa: F401
 from app.support.models import SupportTicket  # noqa: F401
 from app.support.notifications import Notification  # noqa: F401
+from app.apps.models import App, AppInstallation, BlogPost, BlogCategory  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,7 @@ from app.billing.router import router as billing_router  # noqa: E402
 from app.billing.router import webhook_router as stripe_webhook_router  # noqa: E402
 from app.media.router import router as media_router  # noqa: E402
 from app.tracking.router import router as tracking_router  # noqa: E402
+from app.apps.router import router as apps_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -145,6 +147,7 @@ app.include_router(billing_router)
 app.include_router(stripe_webhook_router)
 app.include_router(media_router)
 app.include_router(tracking_router)
+app.include_router(apps_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

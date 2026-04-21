@@ -58,6 +58,8 @@ class IndustryType:
     name: str
     slug: str
     description: str | None = None
+    prompt_hint: str | None = None
+    default_sections: JSON | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -461,6 +463,8 @@ class AdminSiteFilterInput:
 class CreateIndustryInput:
     name: str
     description: str | None = None
+    prompt_hint: str | None = None
+    default_sections: list[str] | None = None
 
 
 @strawberry.input
@@ -468,6 +472,8 @@ class UpdateIndustryInput:
     id: str
     name: str | None = None
     description: str | None = None
+    prompt_hint: str | None = None
+    default_sections: list[str] | None = None
 
 
 @strawberry.type

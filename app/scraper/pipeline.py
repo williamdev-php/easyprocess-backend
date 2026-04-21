@@ -189,6 +189,19 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.status = LeadStatus.GENERATING
             await db.commit()
 
+            # Look up industry prompt hint from DB if lead has an industry_id
+            _industry_hint = None
+            _industry_sections = None
+            if lead.industry_id:
+                from app.sites.models import Industry as IndustryModel
+                ind_result = await db.execute(
+                    select(IndustryModel).where(IndustryModel.id == lead.industry_id)
+                )
+                ind = ind_result.scalar_one_or_none()
+                if ind:
+                    _industry_hint = ind.prompt_hint
+                    _industry_sections = ind.default_sections
+
             gen_result = await generate_site(
                 business_name=lead.business_name,
                 industry=lead.industry,
@@ -204,6 +217,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 images=data["images"],
                 visual_analysis=data.get("visual_analysis"),
                 screenshot_bytes=screenshot_data,
+                industry_prompt_hint=_industry_hint,
+                industry_default_sections=_industry_sections,
             )
 
             # Inject favicon_url into generated site meta (AI may not include it)
