@@ -25,7 +25,7 @@ from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noq
 from app.tracking.models import TrackingEvent  # noqa: F401
 from app.support.models import SupportTicket  # noqa: F401
 from app.support.notifications import Notification  # noqa: F401
-from app.apps.models import App, AppInstallation, BlogPost, BlogCategory  # noqa: F401
+from app.apps.models import App, AppInstallation, AppReview, BlogPost, BlogCategory, ChatConversation, ChatMessage  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     expiration_task = asyncio.create_task(_expiration_loop())
 
     # Smartlead status sync: poll every 15 minutes for email status updates
+    smartlead_task: asyncio.Task | None = None
+
     async def _smartlead_sync_loop():
         from app.smartlead.service import sync_lead_statuses
         from app.database import get_db_session
@@ -89,14 +91,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 logger.exception("Smartlead status sync failed")
             await asyncio.sleep(900)  # 15 minutes
 
-    smartlead_task = asyncio.create_task(_smartlead_sync_loop())
+    if settings.SMARTLEAD_API_KEY:
+        smartlead_task = asyncio.create_task(_smartlead_sync_loop())
+    else:
+        logger.info("Smartlead sync disabled — SMARTLEAD_API_KEY not configured")
 
     yield
 
     # Graceful shutdown: cancel background tasks and let in-flight work drain.
     expiration_task.cancel()
-    smartlead_task.cancel()
-    for task in (expiration_task, smartlead_task):
+    tasks_to_cancel = [expiration_task]
+    if smartlead_task is not None:
+        smartlead_task.cancel()
+        tasks_to_cancel.append(smartlead_task)
+    for task in tasks_to_cancel:
         try:
             await task
         except asyncio.CancelledError:

@@ -232,6 +232,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 site = lead.generated_site
                 site.site_data = site_data
                 site.tokens_used = gen_result.tokens_used
+                site.input_tokens = gen_result.input_tokens
+                site.output_tokens = gen_result.output_tokens
                 site.ai_model = gen_result.model
                 site.generation_cost_usd = gen_result.cost_usd
                 site.status = SiteStatus.DRAFT
@@ -254,6 +256,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     lead_id=lead.id,
                     site_data=site_data,
                     tokens_used=gen_result.tokens_used,
+                    input_tokens=gen_result.input_tokens,
+                    output_tokens=gen_result.output_tokens,
                     ai_model=gen_result.model,
                     generation_cost_usd=gen_result.cost_usd,
                     status=SiteStatus.DRAFT,
@@ -270,8 +274,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             await cache.delete("admin:dashboard_stats")
 
             logger.info(
-                "Pipeline complete for %s: model=%s, tokens=%d, cost=$%.4f",
-                lead.website_url, gen_result.model, gen_result.tokens_used, gen_result.cost_usd,
+                "Pipeline complete for %s: model=%s, in=%d, out=%d, cost=$%.4f",
+                lead.website_url, gen_result.model, gen_result.input_tokens, gen_result.output_tokens, gen_result.cost_usd,
             )
 
     except Exception as e:

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "qvicko-dev-secret-key-change-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    MASTER_SESSION_EXPIRE_DAYS: int = 90  # Long-lived master session for trusted devices
+    TRUSTED_DEVICE_REFRESH_DAYS: int = 30  # Refresh token lifetime for trusted devices
     JWT_ALGORITHM: str = "HS256"
 
     # Supabase Storage

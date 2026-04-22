@@ -68,20 +68,79 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+def compute_device_fingerprint(user_agent: str | None, ip_address: str | None) -> str:
+    """Compute a stable device fingerprint from user-agent and IP subnet.
+
+    Uses the /24 subnet (IPv4) or /48 prefix (IPv6) so that minor IP changes
+    (e.g. DHCP renewal within the same network) don't break trust.
+    """
+    ua_part = (user_agent or "unknown").strip()
+    ip_part = ""
+    if ip_address:
+        if ":" in ip_address:
+            # IPv6 — use first 3 groups (/48)
+            groups = ip_address.split(":")
+            ip_part = ":".join(groups[:3])
+        else:
+            # IPv4 — use first 3 octets (/24)
+            octets = ip_address.split(".")
+            ip_part = ".".join(octets[:3])
+    raw = f"{ua_part}|{ip_part}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def _has_trusted_device(
+    db: AsyncSession, user_id: str, fingerprint: str
+) -> bool:
+    """Check if user has a previous trusted session with the same device fingerprint."""
+    result = await db.execute(
+        select(Session.id).where(
+            and_(
+                Session.user_id == user_id,
+                Session.device_fingerprint == fingerprint,
+                Session.is_trusted.is_(True),
+            )
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def create_session(
     db: AsyncSession,
     user_id: str,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    trust_device: bool = False,
 ) -> tuple[Session, str]:
-    """Create a new session and return (session, raw_token)."""
+    """Create a new session and return (session, raw_token).
+
+    If trust_device is True, or the device fingerprint matches a previously
+    trusted session, the session becomes a master session with extended expiry.
+    """
     raw_token = generate_session_token()
+    now = datetime.now(timezone.utc)
+    fingerprint = compute_device_fingerprint(user_agent, ip_address)
+
+    # Auto-trust if this device was previously trusted by the user
+    is_trusted = trust_device or await _has_trusted_device(db, user_id, fingerprint)
+
+    if is_trusted:
+        refresh_days = settings.TRUSTED_DEVICE_REFRESH_DAYS
+        master_expires = now + timedelta(days=settings.MASTER_SESSION_EXPIRE_DAYS)
+    else:
+        refresh_days = settings.REFRESH_TOKEN_EXPIRE_DAYS
+        master_expires = None
+
     session = Session(
         user_id=user_id,
         token_hash=_hash_token(raw_token),
         ip_address=ip_address,
         user_agent=user_agent,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        device_fingerprint=fingerprint,
+        is_trusted=is_trusted,
+        master_expires_at=master_expires,
+        expires_at=now + timedelta(days=refresh_days),
+        last_active_at=now,
     )
     db.add(session)
     await db.flush()
@@ -89,18 +148,39 @@ async def create_session(
 
 
 async def validate_session(db: AsyncSession, raw_token: str) -> Session | None:
-    """Validate a session token and return the session if valid."""
+    """Validate a session token and return the session if valid.
+
+    For trusted master sessions: the session is valid as long as the master
+    expiry hasn't passed, even if the refresh token's expires_at has lapsed
+    (the refresh endpoint will extend it).
+    """
     token_hash = _hash_token(raw_token)
+    now = datetime.now(timezone.utc)
+
     result = await db.execute(
         select(Session).where(
             and_(
                 Session.token_hash == token_hash,
                 Session.revoked_at.is_(None),
-                Session.expires_at > datetime.now(timezone.utc),
             )
         )
     )
-    return result.scalar_one_or_none()
+    session = result.scalar_one_or_none()
+    if not session:
+        return None
+
+    # For trusted sessions with a master expiry, check master_expires_at
+    if session.is_trusted and session.master_expires_at:
+        if session.master_expires_at > now:
+            return session
+        # Master session expired
+        return None
+
+    # For untrusted sessions, check the normal expires_at
+    if session.expires_at <= now:
+        return None
+
+    return session
 
 
 async def revoke_session(db: AsyncSession, session_id: str) -> None:

@@ -86,6 +86,8 @@ class GeneratedSiteType:
     custom_domain: str | None = None
     views: int = 0
     tokens_used: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     ai_model: str | None = None
     generation_cost_usd: float | None = None
     video_url: str | None = None
@@ -427,6 +429,8 @@ class AdminSiteType:
     custom_domain: str | None = None
     views: int = 0
     tokens_used: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     ai_model: str | None = None
     generation_cost_usd: float | None = None
     published_at: datetime | None = None

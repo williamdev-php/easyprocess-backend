@@ -128,8 +128,10 @@ class Query:
                     id=s.id,
                     ip_address=s.ip_address,
                     user_agent=s.user_agent,
+                    is_trusted=s.is_trusted,
                     created_at=s.created_at,
                     expires_at=s.expires_at,
+                    master_expires_at=s.master_expires_at,
                     is_current=s.token_hash == current_hash if current_hash else False,
                 )
                 for s in sessions
@@ -323,8 +325,10 @@ class Query:
                     id=s.id,
                     ip_address=s.ip_address,
                     user_agent=s.user_agent,
+                    is_trusted=s.is_trusted,
                     created_at=s.created_at,
                     expires_at=s.expires_at,
+                    master_expires_at=s.master_expires_at,
                     is_current=False,
                 )
                 for s in result.scalars().all()

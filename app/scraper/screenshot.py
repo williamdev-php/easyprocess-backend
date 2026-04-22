@@ -188,6 +188,65 @@ async def _dismiss_popups(page) -> None:
             continue
 
 
+_MOBILE_VIEWPORT = {"width": 375, "height": 812}
+
+
+async def capture_preview_screenshot(
+    url: str,
+    site_id: str,
+    device: str = "desktop",
+) -> str | None:
+    """
+    Capture a single preview screenshot for the site general page.
+
+    Args:
+        url: The viewer preview URL
+        site_id: Used for storage path
+        device: "desktop" (1440x900) or "mobile" (375x812)
+
+    Returns: Public URL of the uploaded screenshot, or None on failure.
+    """
+    viewport = _MOBILE_VIEWPORT if device == "mobile" else _VIEWPORT
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport=viewport,
+                locale="sv-SE",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ) if device == "desktop" else (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+                ),
+            )
+            page = await context.new_page()
+
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=_NAVIGATION_TIMEOUT_MS)
+            except Exception:
+                await page.goto(url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT_MS)
+
+            await page.wait_for_timeout(2000)
+            await _dismiss_popups(page)
+
+            screenshot_bytes = await page.screenshot(type="jpeg", quality=85)
+            await browser.close()
+
+            screenshot_url = _upload_screenshot(
+                screenshot_bytes,
+                f"previews/{site_id}",
+                device,
+            )
+            return screenshot_url
+
+    except Exception as e:
+        logger.warning("Preview screenshot failed for site %s (%s): %s", site_id, device, e)
+        return None
+
+
 def _upload_screenshot(data: bytes, lead_id: str, shot_type: str) -> str | None:
     """Upload a screenshot to Supabase Storage."""
     try:

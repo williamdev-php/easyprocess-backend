@@ -31,8 +31,10 @@ class SessionType:
     id: str
     ip_address: str | None = None
     user_agent: str | None = None
+    is_trusted: bool = False
     created_at: datetime
     expires_at: datetime
+    master_expires_at: datetime | None = None
     is_current: bool = False
 
 

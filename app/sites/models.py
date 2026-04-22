@@ -239,6 +239,8 @@ class GeneratedSite(Base):
 
     # AI generation cost tracking
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     generation_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 

@@ -513,6 +513,8 @@ async def create_site_direct(
                     lead_id=lead_id,
                     site_data=site_data,
                     tokens_used=gen_result.tokens_used,
+                    input_tokens=gen_result.input_tokens,
+                    output_tokens=gen_result.output_tokens,
                     ai_model=gen_result.model,
                     generation_cost_usd=gen_result.cost_usd,
                     status=SiteStatus.DRAFT,
@@ -984,6 +986,76 @@ async def resend_webhook(request: Request, db: AsyncSession = Depends(get_db)) -
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
     await process_resend_webhook(db, payload)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Preview screenshots for site general page (desktop + mobile)
+# ---------------------------------------------------------------------------
+
+@router.get("/{site_id}/preview-image")
+async def get_site_preview_image(
+    site_id: str,
+    device: str = "desktop",
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Return a cached preview screenshot URL for a site.
+
+    Query params:
+      - device: "desktop" (1440x900) or "mobile" (375x812)
+
+    Returns: {"url": str | null, "cached": bool}
+    """
+    cache_key = f"preview:{site_id}:{device}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return {"url": cached, "cached": True}
+
+    # Look up the site to get its viewer URL
+    result = await db.execute(
+        select(GeneratedSite).where(GeneratedSite.id == site_id)
+    )
+    site = result.scalar_one_or_none()
+    if not site:
+        raise HTTPException(status_code=404, detail="Site not found")
+
+    # Build preview URL
+    from app.config import settings as _settings
+    viewer_url = _settings.VIEWER_URL
+    if not viewer_url:
+        return {"url": None, "cached": False}
+
+    preview_url = f"{viewer_url}/preview/{site_id}"
+
+    # Capture screenshot
+    try:
+        from app.scraper.screenshot import capture_preview_screenshot
+        screenshot_url = await capture_preview_screenshot(
+            url=preview_url,
+            site_id=site_id,
+            device=device,
+        )
+
+        if screenshot_url:
+            # Cache for 1 hour
+            await cache.set(cache_key, screenshot_url, ttl=3600)
+            return {"url": screenshot_url, "cached": False}
+
+        return {"url": None, "cached": False}
+    except Exception as e:
+        logger.warning(f"Preview screenshot failed for site {site_id}: {e}")
+        return {"url": None, "cached": False}
+
+
+@router.delete("/{site_id}/preview-image")
+async def invalidate_site_preview(
+    site_id: str,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Invalidate cached preview images for a site."""
+    for device in ("desktop", "mobile"):
+        await cache.delete(f"preview:{site_id}:{device}")
     return {"ok": True}
 
 

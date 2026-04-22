@@ -145,8 +145,15 @@ class Session(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     device_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Device trust & master session
+    device_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    is_trusted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    master_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -156,6 +163,7 @@ class Session(Base):
     __table_args__ = (
         Index("idx_sessions_user_id", "user_id"),
         Index("idx_sessions_expires_at", "expires_at"),
+        Index("idx_sessions_device_fp", "device_fingerprint"),
         {"schema": SCHEMA},
     )
 

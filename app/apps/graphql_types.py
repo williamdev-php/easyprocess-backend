@@ -18,6 +18,14 @@ class BlogPostStatusGQL(enum.Enum):
     ARCHIVED = "ARCHIVED"
 
 
+@strawberry.enum
+class AppPricingTypeGQL(enum.Enum):
+    FREE = "FREE"
+    ONE_TIME = "ONE_TIME"
+    MONTHLY = "MONTHLY"
+    USAGE = "USAGE"
+
+
 # ---------------------------------------------------------------------------
 # App types
 # ---------------------------------------------------------------------------
@@ -27,11 +35,23 @@ class AppType:
     id: str
     slug: str
     name: str
-    description: str | None = None
+    description: JSON | None = None
+    long_description: JSON | None = None
     icon_url: str | None = None
     version: str = "1.0.0"
     scopes: JSON | None = None
     sidebar_links: JSON | None = None
+    screenshots: JSON | None = None
+    features: JSON | None = None
+    developer_name: str | None = None
+    developer_url: str | None = None
+    category: str | None = None
+    pricing_type: AppPricingTypeGQL = AppPricingTypeGQL.FREE
+    price: float = 0
+    price_description: str | None = None
+    install_count: int = 0
+    avg_rating: float = 0
+    review_count: int = 0
 
 
 @strawberry.type
@@ -45,6 +65,20 @@ class AppInstallationType:
     settings: JSON | None = None
     sidebar_links: JSON | None = None
     installed_at: datetime | None = None
+
+
+@strawberry.type
+class AppReviewType:
+    id: str
+    app_id: str
+    user_id: str
+    user_name: str
+    site_id: str
+    rating: int
+    title: str | None = None
+    body: str | None = None
+    locale: str | None = None
+    created_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -156,3 +190,96 @@ class BlogPostFilterInput:
     search: str | None = None
     page: int = 1
     page_size: int = 20
+
+
+@strawberry.input
+class CreateAppReviewInput:
+    app_slug: str
+    site_id: str
+    rating: int
+    title: str | None = None
+    body: str | None = None
+    locale: str | None = None
+
+
+@strawberry.input
+class DeleteAppReviewInput:
+    review_id: str
+
+
+# ---------------------------------------------------------------------------
+# Chat enums
+# ---------------------------------------------------------------------------
+
+@strawberry.enum
+class ChatConversationStatusGQL(enum.Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@strawberry.enum
+class ChatSenderTypeGQL(enum.Enum):
+    VISITOR = "visitor"
+    AGENT = "agent"
+
+
+# ---------------------------------------------------------------------------
+# Chat types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class ChatMessageType:
+    id: str
+    conversation_id: str
+    sender_type: ChatSenderTypeGQL
+    sender_name: str | None = None
+    content: str
+    created_at: datetime | None = None
+
+
+@strawberry.type
+class ChatConversationType:
+    id: str
+    site_id: str
+    visitor_email: str
+    visitor_name: str | None = None
+    status: ChatConversationStatusGQL = ChatConversationStatusGQL.OPEN
+    subject: str | None = None
+    last_message_at: datetime | None = None
+    message_count: int = 0
+    last_message_preview: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@strawberry.type
+class ChatConversationDetailType:
+    conversation: ChatConversationType
+    messages: list[ChatMessageType]
+
+
+@strawberry.type
+class ChatConversationListType:
+    items: list[ChatConversationType]
+    total: int
+    page: int
+    page_size: int
+
+
+# ---------------------------------------------------------------------------
+# Chat input types
+# ---------------------------------------------------------------------------
+
+@strawberry.input
+class ChatConversationFilterInput:
+    status: ChatConversationStatusGQL | None = None
+    search: str | None = None
+    page: int = 1
+    page_size: int = 20
+
+
+@strawberry.input
+class SendChatReplyInput:
+    conversation_id: str
+    site_id: str
+    content: str

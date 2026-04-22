@@ -105,6 +105,14 @@ class MetaInfo(BaseModel):
     language: str = "sv"
 
 
+class OpeningHoursDay(BaseModel):
+    """A single day's opening hours for LocalBusiness structured data."""
+    day: str  # "Monday", "Tuesday", ..., "Sunday"
+    open: str = ""  # "09:00"
+    close: str = ""  # "17:00"
+    closed: bool = False
+
+
 class BusinessInfo(BaseModel):
     name: str = ""
     tagline: str = ""
@@ -113,6 +121,8 @@ class BusinessInfo(BaseModel):
     address: str | None = None
     org_number: str | None = None
     social_links: dict[str, str] = {}
+    opening_hours_enabled: bool = False
+    opening_hours: list[OpeningHoursDay] = []
 
 
 class SEOConfig(BaseModel):

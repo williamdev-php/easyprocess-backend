@@ -28,21 +28,29 @@ class GenerationResult:
         self,
         site_schema: SiteSchema,
         tokens_used: int,
+        input_tokens: int,
+        output_tokens: int,
         model: str,
         cost_usd: float,
         duration_ms: int,
     ):
         self.site_schema = site_schema
         self.tokens_used = tokens_used
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
         self.model = model
         self.cost_usd = cost_usd
         self.duration_ms = duration_ms
 
 
-# Approximate costs per 1M tokens (input + output blended)
-_COST_PER_1M: dict[str, float] = {
+# Anthropic pricing per 1M tokens (USD) — https://docs.anthropic.com/en/docs/about-claude/models
+_INPUT_COST_PER_1M: dict[str, float] = {
     "claude-haiku-4-5-20251001": 1.00,
     "claude-sonnet-4-6": 3.00,
+}
+_OUTPUT_COST_PER_1M: dict[str, float] = {
+    "claude-haiku-4-5-20251001": 5.00,
+    "claude-sonnet-4-6": 15.00,
 }
 
 
@@ -151,7 +159,7 @@ async def generate_site(
         try:
             start = time.monotonic()
 
-            raw_json, tokens = await _call_anthropic(
+            raw_json, input_tokens, output_tokens = await _call_anthropic(
                 system_prompt, user_prompt, model,
                 screenshot_bytes=screenshot_bytes,
             )
@@ -172,17 +180,21 @@ async def generate_site(
 
             site_schema = SiteSchema(**site_data)
 
-            cost_per_m = _COST_PER_1M.get(model, 1.0)
-            cost = (tokens / 1_000_000) * cost_per_m
+            total_tokens = input_tokens + output_tokens
+            input_cost_per_m = _INPUT_COST_PER_1M.get(model, 1.0)
+            output_cost_per_m = _OUTPUT_COST_PER_1M.get(model, 5.0)
+            cost = (input_tokens / 1_000_000) * input_cost_per_m + (output_tokens / 1_000_000) * output_cost_per_m
 
             logger.info(
-                "Site generated: model=%s tokens=%d cost=$%.4f duration=%dms attempt=%d",
-                model, tokens, cost, duration_ms, attempt + 1,
+                "Site generated: model=%s in=%d out=%d cost=$%.4f duration=%dms attempt=%d",
+                model, input_tokens, output_tokens, cost, duration_ms, attempt + 1,
             )
 
             return GenerationResult(
                 site_schema=site_schema,
-                tokens_used=tokens,
+                tokens_used=total_tokens,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 model=model,
                 cost_usd=round(cost, 6),
                 duration_ms=duration_ms,
@@ -201,8 +213,8 @@ async def _call_anthropic(
     user: str,
     model: str,
     screenshot_bytes: list[dict] | None = None,
-) -> tuple[str, int]:
-    """Call Anthropic API with optional screenshot images. Returns (json_string, total_tokens)."""
+) -> tuple[str, int, int]:
+    """Call Anthropic API with optional screenshot images. Returns (json_string, input_tokens, output_tokens)."""
 
     # Build user message content — include screenshots as images if available
     user_content: list[dict] = []
@@ -258,5 +270,4 @@ async def _call_anthropic(
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
 
-        tokens = data["usage"]["input_tokens"] + data["usage"]["output_tokens"]
-        return content, tokens
+        return content, data["usage"]["input_tokens"], data["usage"]["output_tokens"]

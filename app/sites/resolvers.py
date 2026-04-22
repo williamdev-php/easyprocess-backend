@@ -1494,8 +1494,9 @@ class SiteMutation:
                 )
                 db.add(draft)
 
-            await db.commit()
+            await db.flush()
             await db.refresh(draft)
+            await db.commit()
 
             return DraftType(
                 site_id=draft.site_id,

@@ -55,14 +55,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
-REFRESH_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
 
 
-def _set_refresh_cookie(response: Response, token: str) -> None:
+def _cookie_max_age(is_trusted: bool) -> int:
+    """Return cookie max-age in seconds based on device trust."""
+    if is_trusted:
+        return settings.MASTER_SESSION_EXPIRE_DAYS * 24 * 60 * 60
+    return settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+
+
+def _set_refresh_cookie(response: Response, token: str, is_trusted: bool = False) -> None:
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=token,
-        max_age=REFRESH_COOKIE_MAX_AGE,
+        max_age=_cookie_max_age(is_trusted),
         httponly=True,
         samesite="lax",
         secure=settings.ENVIRONMENT == "production",
@@ -106,7 +112,10 @@ async def register(
     ip = get_client_ip(request)
     ua = request.headers.get("user-agent")
 
-    session, raw_token = await create_session(db, user.id, ip_address=ip, user_agent=ua)
+    # Trust the device on first registration
+    session, raw_token = await create_session(
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+    )
     await log_audit_event(db, AuditEventType.REGISTER, user.id, ip, ua)
 
     # Send verification email (non-blocking — user is created even if email fails,
@@ -124,7 +133,7 @@ async def register(
         logger.warning("User %s registered but verification email was NOT delivered", user.id)
 
     access_token = create_access_token(user.id)
-    _set_refresh_cookie(response, raw_token)
+    _set_refresh_cookie(response, raw_token, is_trusted=session.is_trusted)
     return TokenResponse(access_token=access_token)
 
 
@@ -158,11 +167,14 @@ async def login(
     await reset_failed_logins(db, user)
     await invalidate_user_cache(user.id, user.email)
 
-    session, raw_token = await create_session(db, user.id, ip_address=ip, user_agent=ua)
+    # Trust device on successful login (auto-trusts if fingerprint was previously trusted)
+    session, raw_token = await create_session(
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+    )
     await log_audit_event(db, AuditEventType.LOGIN, user.id, ip, ua)
 
     access_token = create_access_token(user.id)
-    _set_refresh_cookie(response, raw_token)
+    _set_refresh_cookie(response, raw_token, is_trusted=session.is_trusted)
     return TokenResponse(access_token=access_token)
 
 
@@ -192,14 +204,24 @@ async def refresh(
         _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
 
-    # Rotate session token
+    # Rotate session token, carrying over device trust
     ip = get_client_ip(request)
     ua = request.headers.get("user-agent")
+
+    was_trusted = session.is_trusted
     await revoke_session(db, session.id)
-    new_session, new_token = await create_session(db, user.id, ip_address=ip, user_agent=ua)
+    new_session, new_token = await create_session(
+        db, user.id, ip_address=ip, user_agent=ua,
+        trust_device=was_trusted,
+    )
+
+    # Carry over the original master expiry so it doesn't reset on each refresh
+    if was_trusted and session.master_expires_at and new_session.master_expires_at:
+        new_session.master_expires_at = session.master_expires_at
+        await db.flush()
 
     access_token = create_access_token(user.id)
-    _set_refresh_cookie(response, new_token)
+    _set_refresh_cookie(response, new_token, is_trusted=new_session.is_trusted)
     return TokenResponse(access_token=access_token)
 
 
@@ -358,8 +380,10 @@ async def list_sessions(
             id=s.id,
             ip_address=s.ip_address,
             user_agent=s.user_agent,
+            is_trusted=s.is_trusted,
             created_at=s.created_at,
             expires_at=s.expires_at,
+            master_expires_at=s.master_expires_at,
             is_current=s.token_hash == current_hash if current_hash else False,
         )
         for s in sessions
