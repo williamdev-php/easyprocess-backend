@@ -28,7 +28,9 @@ from app.auth.service import (
     create_password_reset_token,
     create_session,
     create_user,
+    exchange_google_code,
     get_client_ip,
+    get_or_create_google_user,
     get_user_by_email,
     get_user_by_id,
     invalidate_user_cache,
@@ -172,6 +174,62 @@ async def login(
         db, user.id, ip_address=ip, user_agent=ua, trust_device=True
     )
     await log_audit_event(db, AuditEventType.LOGIN, user.id, ip, ua)
+
+    access_token = create_access_token(user.id)
+    _set_refresh_cookie(response, raw_token, is_trusted=session.is_trusted)
+    return TokenResponse(access_token=access_token)
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth
+# ---------------------------------------------------------------------------
+
+
+@router.post("/google", response_model=TokenResponse)
+@limiter.limit("10/minute")
+async def google_auth(
+    body: dict,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """Authenticate with Google OAuth. Accepts {code, redirect_uri, locale?}."""
+    code = body.get("code")
+    redirect_uri = body.get("redirect_uri")
+    locale = body.get("locale", "sv")
+
+    if not code or not redirect_uri:
+        raise HTTPException(status_code=400, detail="Missing code or redirect_uri")
+
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="Google login is not configured")
+
+    try:
+        google_user = await exchange_google_code(code, redirect_uri)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not google_user.get("email"):
+        raise HTTPException(status_code=400, detail="Google account has no email")
+
+    user = await get_or_create_google_user(db, google_user, locale=locale)
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account deactivated")
+
+    ip = get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
+    await reset_failed_logins(db, user)
+    await invalidate_user_cache(user.id, user.email)
+
+    session, raw_token = await create_session(
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+    )
+    await log_audit_event(
+        db, AuditEventType.LOGIN, user.id, ip, ua,
+        {"provider": "google"},
+    )
 
     access_token = create_access_token(user.id)
     _set_refresh_cookie(response, raw_token, is_trusted=session.is_trusted)

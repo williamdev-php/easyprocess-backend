@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     SMARTLEAD_DAILY_SEND_LIMIT: int = 50
     SMARTLEAD_WARMUP_ENABLED: bool = True
 
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     # Stripe
     STRIPE_SECRET_KEY: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""

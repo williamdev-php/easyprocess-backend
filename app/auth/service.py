@@ -3,13 +3,14 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.models import AuditEventType, AuditLog, Session, SettingsAuditLog, User
+from app.auth.models import AuditEventType, AuditLog, Session, SettingsAuditLog, SocialAccount, SocialProvider, User
 from app.cache import cache
 from app.config import settings
 
@@ -543,3 +544,121 @@ async def validate_email_verification_token(db: AsyncSession, raw_token: str):
     if token.expires_at < datetime.now(timezone.utc):
         return None
     return token
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth
+# ---------------------------------------------------------------------------
+
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+
+async def exchange_google_code(code: str, redirect_uri: str) -> dict:
+    """Exchange a Google authorization code for user info.
+
+    Returns dict with keys: id, email, name, picture.
+    Raises ValueError on failure.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        # Exchange code for access token
+        token_resp = await client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+        if token_resp.status_code != 200:
+            logger.warning("Google token exchange failed: %s", token_resp.text)
+            raise ValueError("Failed to exchange Google authorization code")
+
+        token_data = token_resp.json()
+        google_access_token = token_data.get("access_token")
+        if not google_access_token:
+            raise ValueError("No access token in Google response")
+
+        # Fetch user info
+        userinfo_resp = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {google_access_token}"},
+        )
+        if userinfo_resp.status_code != 200:
+            raise ValueError("Failed to fetch Google user info")
+
+        return userinfo_resp.json()
+
+
+async def get_or_create_google_user(
+    db: AsyncSession, google_user: dict, locale: str = "sv"
+) -> User:
+    """Find existing user by Google social account or email, or create a new one.
+
+    Links the Google account if not already linked.
+    Returns the User.
+    """
+    google_id = str(google_user["id"])
+    google_email = google_user.get("email", "").lower()
+    google_name = google_user.get("name", google_email.split("@")[0])
+    google_picture = google_user.get("picture")
+
+    # 1. Check if there's already a SocialAccount for this Google ID
+    result = await db.execute(
+        select(SocialAccount)
+        .where(
+            and_(
+                SocialAccount.provider == SocialProvider.GOOGLE,
+                SocialAccount.provider_user_id == google_id,
+            )
+        )
+        .options(selectinload(SocialAccount.user))
+    )
+    social = result.scalar_one_or_none()
+
+    if social and social.user:
+        # Update provider data on each login
+        social.provider_data = google_user
+        social.provider_email = google_email
+        await db.flush()
+        return social.user
+
+    # 2. Check if a user with this email already exists
+    user = await get_user_by_email(db, google_email)
+
+    if not user:
+        # 3. Create new user (no password — social-only account)
+        user = User(
+            email=google_email,
+            password_hash=None,
+            full_name=google_name,
+            avatar_url=google_picture,
+            locale=locale,
+            is_verified=True,  # Google has already verified the email
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(user)
+
+    # 4. Link Google account to user
+    social_account = SocialAccount(
+        user_id=user.id,
+        provider=SocialProvider.GOOGLE,
+        provider_user_id=google_id,
+        provider_email=google_email,
+        provider_data=google_user,
+    )
+    db.add(social_account)
+
+    # Mark email as verified since Google verified it
+    if not user.is_verified:
+        user.is_verified = True
+
+    # Set avatar if user doesn't have one
+    if not user.avatar_url and google_picture:
+        user.avatar_url = google_picture
+
+    await db.flush()
+    return user
