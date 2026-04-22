@@ -20,3 +20,4 @@ playwright
 anthropic
 stripe
 python-dateutil
+nh3
