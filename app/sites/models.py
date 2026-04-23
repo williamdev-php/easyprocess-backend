@@ -620,3 +620,51 @@ class ContactMessage(Base):
         Index("idx_contact_messages_site_id", "site_id"),
         {"schema": SCHEMA},
     )
+
+
+class GscConnectionStatus(str, enum.Enum):
+    CONNECTED = "CONNECTED"
+    EXPIRED = "EXPIRED"
+    REVOKED = "REVOKED"
+
+
+class GscConnection(Base):
+    """Google Search Console OAuth connection for a user.
+
+    Stores refresh tokens so the backend can add the user's domain
+    to GSC, submit sitemaps, and request indexing on their behalf.
+    Only one connection per user.
+    """
+    __tablename__ = "gsc_connections"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        unique=True, nullable=False,
+    )
+    google_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[GscConnectionStatus] = mapped_column(
+        Enum(GscConnectionStatus), default=GscConnectionStatus.CONNECTED, nullable=False
+    )
+    # Domain that was indexed (e.g. "example.com")
+    indexed_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_gsc_connections_user_id", "user_id"),
+        {"schema": SCHEMA},
+    )

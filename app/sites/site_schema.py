@@ -560,6 +560,18 @@ class NavItemSchema(BaseModel):
     href: str
 
 
+class ExtraSection(BaseModel):
+    """A duplicated section instance. Allows multiple copies of the same
+    section type with different content. Stored in `extra_sections` keyed
+    by a unique instance id (e.g. "about__dup_1700000000000").
+
+    The `type` must be one of the known section keys. The `data` dict
+    follows the same shape as the corresponding section model.
+    """
+    type: str  # section key, e.g. "about", "stats", "process"
+    data: dict = {}  # matches the section's Pydantic model shape
+
+
 # ---------------------------------------------------------------------------
 # Full site schema
 # ---------------------------------------------------------------------------
@@ -627,8 +639,15 @@ class SiteSchema(BaseModel):
     banner: BannerData | None = None
     ranking: RankingData | None = None
 
+    # Duplicated sections — allows multiple instances of the same section type.
+    # Keys are instance ids like "about__dup_1700000000000".
+    # Values contain the section type and its data.
+    # section_order references these keys to position them on the page.
+    extra_sections: dict[str, ExtraSection] = {}
+
     # Per-section settings (animation, background, etc.)
     # Keys are section names, e.g. {"hero": {"animation": "fade-in"}, "about": {"animation": "slide-right"}}
+    # Also supports duplicate keys like "about__dup_1700000000000".
     section_settings: dict[str, SectionSettings] = {}
 
     seo: SEOConfig = SEOConfig()

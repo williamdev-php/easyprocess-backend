@@ -491,3 +491,16 @@ class SmartleadMessageType:
     to_email: str = ""
     timestamp: datetime | None = None
     status: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Google Search Console types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class GscConnectionType:
+    connected: bool
+    google_email: str | None = None
+    indexed_domain: str | None = None
+    indexed_at: datetime | None = None
+    status: str | None = None

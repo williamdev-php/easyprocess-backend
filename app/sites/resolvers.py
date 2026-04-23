@@ -28,6 +28,7 @@ from app.sites.graphql_types import (
     CreateIndustryInput,
     CreateLeadInput,
     CustomDomainType,
+    GscConnectionType,
     DailyVisitorPoint,
     DashboardStatsType,
     DomainPurchaseType,
@@ -58,6 +59,7 @@ from app.sites.models import (
     BLACKLISTED_SUBDOMAINS,
     CustomDomain,
     DomainPurchase,
+    GscConnectionStatus,
     DomainStatus,
     GeneratedSite,
     InboundEmail,
@@ -539,6 +541,25 @@ class SiteQuery:
             domains = [_domain_to_gql(d) for d in result.scalars().all()]
 
             return domains
+
+    @strawberry.field
+    async def my_gsc_connection(self, info: Info) -> GscConnectionType:
+        """Get the current user's Google Search Console connection status."""
+        user = _require_user(await _get_user_from_info(info))
+
+        async with get_db_session() as db:
+            from app.gsc.service import get_gsc_connection
+            connection = await get_gsc_connection(db, str(user.id))
+            if not connection or connection.status != GscConnectionStatus.CONNECTED:
+                return GscConnectionType(connected=False)
+
+            return GscConnectionType(
+                connected=True,
+                google_email=connection.google_email,
+                indexed_domain=connection.indexed_domain,
+                indexed_at=connection.indexed_at,
+                status=connection.status.value,
+            )
 
     @strawberry.field
     async def search_domain(self, info: Info, domain: str) -> DomainSearchResult:
