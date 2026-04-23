@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
@@ -27,6 +28,8 @@ from app.auth.dependencies import get_current_user, get_optional_user
 from app.auth.models import User
 from app.sites.models import ContactMessage, CustomDomain, DomainStatus, GeneratedSite, Industry, Lead, LeadStatus, PageView, SiteStatus
 from app.sites.site_schema import SiteSchema
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
 
