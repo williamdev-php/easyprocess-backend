@@ -1047,13 +1047,24 @@ async def get_site_preview_image(
     if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
-    # Build preview URL
+    # Build preview URL — use preview subdomain to avoid bare-domain redirects
     from app.config import settings as _settings
     viewer_url = _settings.VIEWER_URL
     if not viewer_url:
         return {"url": None, "cached": False}
 
-    preview_url = f"{viewer_url}/preview/{site_id}"
+    # In production, use the preview subdomain (bare domain has a stale redirect)
+    if "localhost" not in viewer_url:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(viewer_url)
+            host = parsed.hostname or ""
+            host = host.removeprefix("www.")
+            preview_url = f"{parsed.scheme}://preview.{host}/preview/{site_id}"
+        except Exception:
+            preview_url = f"{viewer_url}/preview/{site_id}"
+    else:
+        preview_url = f"{viewer_url}/preview/{site_id}"
 
     # Capture screenshot
     try:
