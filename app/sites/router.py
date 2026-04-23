@@ -5,8 +5,6 @@ These are used by the Next.js frontend and external services (Resend webhooks).
 GraphQL handles admin operations; REST handles public/rendering endpoints.
 """
 
-from __future__ import annotations
-
 import base64
 import hashlib
 import hmac
@@ -406,8 +404,8 @@ class CreateSiteFromUrlPayload(BaseModel):
 @router.post("/create")
 @limiter.limit("5/day")
 async def create_site_direct(
-    payload: CreateSitePayload,
     request: Request,
+    payload: CreateSitePayload,
     current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -472,6 +470,32 @@ async def create_site_direct(
         from app.database import get_db_session
         async with get_db_session() as bg_db:
             try:
+                # Upload base64 images to Supabase so the AI gets real URLs
+                stored_images: list[dict] | None = None
+                if payload.image_urls:
+                    from app.storage.supabase import upload_file
+                    stored_images = []
+                    for idx, data_url in enumerate(payload.image_urls[:12]):
+                        try:
+                            if not data_url or not data_url.startswith("data:"):
+                                continue
+                            # Parse data URI: data:<mime>;base64,<data>
+                            header, b64_data = data_url.split(",", 1)
+                            mime = header.split(":")[1].split(";")[0]
+                            ext = mime.split("/")[-1].replace("jpeg", "jpg")
+                            raw = base64.b64decode(b64_data)
+                            public_url = upload_file(
+                                file_data=raw,
+                                file_name=f"upload-{idx}.{ext}",
+                                content_type=mime,
+                                prefix=f"user-images/{lead_id}",
+                            )
+                            stored_images.append({"url": public_url, "alt": "", "category": "user-upload"})
+                        except Exception:
+                            continue
+                    if not stored_images:
+                        stored_images = None
+
                 gen_result = await generate_site(
                     business_name=payload.business_name,
                     industry=industry_name,
@@ -484,7 +508,7 @@ async def create_site_direct(
                     services=None,
                     logo_url=payload.logo_url,
                     social_links=None,
-                    images=payload.image_urls,
+                    images=stored_images,
                     visual_analysis=None,
                     industry_prompt_hint=industry_prompt_hint,
                     industry_default_sections=industry_default_sections,
@@ -562,8 +586,8 @@ async def create_site_direct(
 @router.post("/create-from-url")
 @limiter.limit("5/day")
 async def create_site_from_url(
-    payload: CreateSiteFromUrlPayload,
     request: Request,
+    payload: CreateSiteFromUrlPayload,
     current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:

@@ -630,11 +630,21 @@ async def get_or_create_google_user(
 
     if not user:
         # 3. Create new user (no password — social-only account)
+        # For Google Workspace accounts, "hd" contains the hosted domain
+        # (e.g. "acmecorp.com") — use it as company name hint.
+        hosted_domain = google_user.get("hd")  # only set for Workspace accounts
+        company_name = None
+        if hosted_domain:
+            # Turn "acmecorp.com" into "Acmecorp" (strip TLD, capitalize)
+            domain_parts = hosted_domain.split(".")
+            company_name = domain_parts[0].capitalize() if domain_parts else None
+
         user = User(
             email=google_email,
             password_hash=None,
             full_name=google_name,
             avatar_url=google_picture,
+            company_name=company_name,
             locale=locale,
             is_verified=True,  # Google has already verified the email
         )

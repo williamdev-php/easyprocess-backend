@@ -65,6 +65,7 @@ _VALID_TOP_LEVEL_KEYS = {
     "hero", "about", "features", "stats", "services", "process",
     "gallery", "team", "testimonials", "faq", "cta", "contact",
     "pricing", "video", "logo_cloud", "custom_content", "banner",
+    "ranking",
     "seo",
 }
 
@@ -93,7 +94,8 @@ def _sanitize_ai_output(site_data: dict) -> None:
     # Fix null strings in blocks that have required title/subtitle fields
     for block_key in ("stats", "testimonials", "faq", "features", "services",
                       "gallery", "process", "team", "about",
-                      "pricing", "video", "logo_cloud", "custom_content"):
+                      "pricing", "video", "logo_cloud", "custom_content",
+                      "ranking"):
         block = site_data.get(block_key)
         if isinstance(block, dict):
             for str_field in ("title", "subtitle"):

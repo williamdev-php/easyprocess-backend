@@ -42,8 +42,14 @@ REGLER:
 4. FÄRGER: Använd de EXAKTA färgerna från den visuella analysen. Om visuell analys saknas, använd CSS-färgerna. Förbättra bara om färgerna är genuint dåliga.
 5. Varje content-block (hero, about, services, etc.) är en separat nyckel. Sätt till null om sektionen inte är relevant.
 6. Inkludera INTE navigation, footer eller page-struktur — det genereras automatiskt.
-7. Fyll i de sektioner som anges i section_order. Om ingen section_order ges, inkludera 5-7 relevanta sektioner — INTE alla.
-7b. Inkludera en "section_order"-nyckel med en lista av sektionsnamn i optimal visningsordning. Anpassa ordningen efter bransch.
+7. VIKTIGT — VÄLJ SEKTIONER INTELLIGENT baserat på företagets storlek, bransch och tillgänglig information:
+   - En enkel affärsidé behöver FÄRRE sektioner (3-5). T.ex. hero + about + contact räcker för en frisör.
+   - Ett större företag med mycket information kan ha fler sektioner (5-8).
+   - Inkludera ALDRIG alla sektioner. Välj de mest relevanta.
+   - "hero" ska ALLTID inkluderas.
+   - Sektioner som pricing, team, ranking, video, logo_cloud ska BARA inkluderas om det finns relevant data eller det verkligen passar branschen.
+   - Tomma/generiska sektioner är värre än inga sektioner alls.
+7b. Inkludera en "section_order"-nyckel med ENBART de sektioner du valt, i optimal visningsordning. Anpassa ordningen efter bransch.
 8. CTA-knappar ska ha href satt till "#contact".
 9. Generera 4-6 services om företaget har tjänster.
 10. Generera 3-5 features/fördelar.
@@ -74,6 +80,7 @@ NYA SEKTIONSTYPER (använd när det är relevant):
 - "logo_cloud": Partners/kunder med logotyper. Varje logo har name och image_url.
 - "custom_content": Fritext-sektion med blocks[]. Varje block har type ("text"/"image"/"button"/"heading"), content, url, alt, label, href.
 - "banner": Fullbredd-meddelande med text och valfri button.
+- "ranking": Topplista / bäst-i-test-sektion med rankade objekt. Perfekt för jämförelsesidor, topp-5/10-listor, produktrecensioner. Varje item har rank (nummer), title, description, image (URL eller null), link ({label, href} eller null för extern länk/knapp).
 
 TILLGÄNGLIGA STILVARIANTER:
 ─────────────────────────────
@@ -171,7 +178,9 @@ VIKTIGT:
 - Inkludera INTE "navigation", "footer" eller "pages"
 - Skriv KORTFATTAT — about max 120 ord, beskrivningar max 2 meningar
 - Inkludera "section_settings" med varierade animationer per sektion
-- Inkludera BARA sektioner som är relevanta (5-7 sektioner, inte alla)
+- Inkludera BARA sektioner som är relevanta — välj INTELLIGENT baserat på kontext
+- Sektioner du INTE inkluderar ska sättas till null eller utelämnas helt
+- Inkludera "ranking" om sidan handlar om jämförelser/toplistor/bäst-i-test
 
 {{
   "meta": {{
@@ -287,6 +296,13 @@ VIKTIGT:
   "logo_cloud": null,
   "custom_content": null,
   "banner": null,
+  "ranking": {{
+    "title": "Topp 5 bästa ...",
+    "subtitle": "Kort intro",
+    "items": [
+      {{ "rank": 1, "title": "Namn", "description": "Kort beskrivning", "image": null, "link": {{ "label": "Besök", "href": "https://..." }} }}
+    ]
+  }},
   "seo": {{
     "structured_data": {{}},
     "robots": "index, follow"
@@ -454,18 +470,23 @@ def build_prompt(
     if images:
         img_parts = []
         for img in images[:20]:
-            url = img.get("url", "")
-            alt = img.get("alt", "")
-            cat = img.get("category", "general")
-            w = img.get("width", "?")
-            h = img.get("height", "?")
-            if url:
-                line = f"- [{cat}] {url}"
-                if alt:
-                    line += f" (alt: {alt})"
-                if w != "?" and h != "?":
-                    line += f" [{w}x{h}]"
-                img_parts.append(line)
+            if isinstance(img, str):
+                # Plain URL or data-URI from frontend upload
+                if img:
+                    img_parts.append(f"- [user-upload] {img[:120]}")
+            elif isinstance(img, dict):
+                url = img.get("url", "")
+                alt = img.get("alt", "")
+                cat = img.get("category", "general")
+                w = img.get("width", "?")
+                h = img.get("height", "?")
+                if url:
+                    line = f"- [{cat}] {url}"
+                    if alt:
+                        line += f" (alt: {alt})"
+                    if w != "?" and h != "?":
+                        line += f" [{w}x{h}]"
+                    img_parts.append(line)
         if img_parts:
             images_summary = "\n".join(img_parts)
 

@@ -88,8 +88,8 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/minute")
-@limiter.limit("2/day")
+@limiter.limit("5/minute")
+@limiter.limit("10/day")
 async def register(
     body: UserRegister,
     request: Request,
