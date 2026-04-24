@@ -16,8 +16,8 @@ engine = create_async_engine(
     settings.effective_database_url,
     echo=False,
     # Pool sizing
-    pool_size=5,
-    max_overflow=10,
+    pool_size=10,
+    max_overflow=20,
     pool_timeout=30,  # seconds to wait for a connection from the pool
     # Connection health
     pool_pre_ping=True,  # test connections before checkout
