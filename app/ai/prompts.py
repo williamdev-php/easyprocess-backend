@@ -50,7 +50,13 @@ REGLER:
    - Sektioner som pricing, team, ranking, video, logo_cloud ska BARA inkluderas om det finns relevant data eller det verkligen passar branschen.
    - Tomma/generiska sektioner är värre än inga sektioner alls.
 7b. Inkludera en "section_order"-nyckel med ENBART de sektioner du valt, i optimal visningsordning. Anpassa ordningen efter bransch.
-8. CTA-knappar ska ha href satt till "#contact".
+8. CTA-KNAPPAR & LÄNKAR — VIKTIGT:
+   - Bestäm FÖRST vilka pages du ska skapa (slug-lista). Sedan använd de slugsen som href i knappar.
+   - Om du skapar en kontaktsida med slug "kontakt" → alla CTA-knappar ska peka till "/kontakt" (INTE "#contact").
+   - Om du skapar en tjänstesida med slug "tjanster" → "Se våra tjänster"-knappar ska peka till "/tjanster".
+   - Alla href i CTA-knappar MÅSTE matcha en faktisk page-slug eller vara en extern URL.
+   - Använd ALDRIG "#contact" eller andra ankarlänkar. Använd alltid riktiga sidreferenser som "/kontakt".
+   - Kontrollera att VARJE href i hela JSON:en pekar till en sida som faktiskt finns i pages-arrayen.
 9. Generera 4-6 services om företaget har tjänster.
 10. Generera 3-5 features/fördelar.
 11. Generera 3-4 stats/nyckeltal med realistiska värden.
@@ -252,7 +258,7 @@ VIKTIGT:
   "hero": {{
     "headline": "Kraftfull rubrik, max 8 ord",
     "subtitle": "1-2 meningar som förklarar vad företaget gör",
-    "cta": {{ "label": "Tydlig CTA-text", "href": "#contact" }},
+    "cta": {{ "label": "Tydlig CTA-text", "href": "/kontakt" }},
     "background_image": null
   }},
   "about": {{
@@ -321,7 +327,7 @@ VIKTIGT:
   "cta": {{
     "title": "Redo att komma igång?",
     "text": "1 mening",
-    "button": {{ "label": "CTA-text", "href": "#contact" }}
+    "button": {{ "label": "CTA-text", "href": "/kontakt" }}
   }},
   "contact": {{
     "title": "Kontakta oss",
