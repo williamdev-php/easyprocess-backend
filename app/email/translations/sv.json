@@ -120,5 +120,161 @@
     "warning": "Denna \u00e5tg\u00e4rd kan inte \u00e5ngras. Hemsidan kommer att d\u00f6ljas fr\u00e5n alla bes\u00f6kare och alla kopplade dom\u00e4ner kommer att tas bort. Klicka p\u00e5 knappen nedan f\u00f6r att bekr\u00e4fta raderingen. L\u00e4nken \u00e4r giltig i 24\u00a0timmar.",
     "cta": "Bekr\u00e4fta radering",
     "ignore": "Om du inte beg\u00e4rde denna radering kan du ignorera detta meddelande."
+  },
+
+  "booking_common": {
+    "customer": "Kund",
+    "phone": "Telefon",
+    "service": "Tj\u00e4nst",
+    "date": "Datum",
+    "amount": "Belopp",
+    "payment_method": "Betalningsmetod",
+    "payment_methods": {
+      "on_site": "Betala p\u00e5 plats",
+      "card": "Kortbetalning",
+      "swish": "Swish",
+      "klarna": "Klarna",
+      "stripe": "Kortbetalning"
+    }
+  },
+
+  "booking_owner": {
+    "subject": "Ny bokning fr\u00e5n {customer_name} \u2014 {site_name}",
+    "heading": "Ny bokning mottagen",
+    "greeting": "Hej {name},",
+    "body": "En ny bokning har inkommit via {site_name}.",
+    "cta": "Hantera bokning",
+    "manage_note": "Logga in p\u00e5 din kontrollpanel f\u00f6r att bekr\u00e4fta eller hantera bokningen."
+  },
+
+  "booking_customer_confirm": {
+    "subject": "Bokningsbekr\u00e4ftelse \u2014 {site_name}",
+    "heading": "Tack f\u00f6r din bokning!",
+    "greeting": "Hej {name},",
+    "body": "Vi har tagit emot din bokning hos {site_name}. Du kommer att f\u00e5 en bekr\u00e4ftelse n\u00e4r bokningen har godk\u00e4nts.",
+    "info": "Du kommer att meddelas via e-post n\u00e4r bokningen har bekr\u00e4ftats.",
+    "footer": "Detta mail skickades p\u00e5 uppdrag av {site_name} via Qvicko."
+  },
+
+  "booking_confirmed": {
+    "subject": "Din bokning \u00e4r bekr\u00e4ftad \u2014 {site_name}",
+    "heading": "Bokningen \u00e4r bekr\u00e4ftad!",
+    "greeting": "Hej {name},",
+    "body": "Din bokning hos {site_name} har nu bekr\u00e4ftats.",
+    "info": "Se till att vara p\u00e5 plats i god tid. Vid fr\u00e5gor eller \u00e4ndringar, kontakta oss direkt.",
+    "footer": "Detta mail skickades p\u00e5 uppdrag av {site_name} via Qvicko."
+  },
+
+  "booking_cancelled": {
+    "subject": "Din bokning har avbokats \u2014 {site_name}",
+    "heading": "Bokningen har avbokats",
+    "greeting": "Hej {name},",
+    "body": "Din bokning hos {site_name} har tyv\u00e4rr avbokats.",
+    "contact_note": "Kontakta {site_name} direkt om du har fr\u00e5gor eller vill boka en ny tid."
+  },
+
+  "booking_completed": {
+    "subject": "Bokningen \u00e4r genomf\u00f6rd \u2014 {site_name}",
+    "heading": "Tack f\u00f6r ditt bes\u00f6k!",
+    "greeting": "Hej {name},",
+    "body": "Din bokning hos {site_name} \u00e4r nu markerad som genomf\u00f6rd.",
+    "thanks": "Tack f\u00f6r att du valde {site_name}. Vi hoppas att du var n\u00f6jd!"
+  },
+
+  "booking_payment_received": {
+    "subject": "Betalning mottagen \u2014 {site_name}",
+    "heading": "Betalning bekr\u00e4ftad",
+    "greeting": "Hej {name},",
+    "body": "Vi har tagit emot din betalning f\u00f6r bokningen hos {site_name}.",
+    "info": "Betalningen \u00e4r registrerad och bekr\u00e4ftad. Du beh\u00f6ver inte g\u00f6ra n\u00e5got mer.",
+    "footer": "Detta mail skickades p\u00e5 uppdrag av {site_name} via Qvicko."
+  },
+
+  "booking_payment_failed": {
+    "subject": "Betalningen misslyckades \u2014 {site_name}",
+    "heading": "Betalningen kunde inte genomf\u00f6ras",
+    "greeting": "Hej {name},",
+    "body": "Betalningen f\u00f6r din bokning hos {site_name} kunde tyv\u00e4rr inte genomf\u00f6ras.",
+    "warning": "Kontrollera att dina kortuppgifter \u00e4r korrekta och att det finns t\u00e4ckning p\u00e5 kontot. F\u00f6rs\u00f6k sedan igen.",
+    "contact_note": "Kontakta {site_name} om problemet kvarst\u00e5r."
+  },
+
+  "payout_initiated": {
+    "subject": "Utbetalning initierad \u2014 {amount}",
+    "heading": "Utbetalning p\u00e5 v\u00e4g",
+    "greeting": "Hej {name},",
+    "body": "En utbetalning p\u00e5 {amount} fr\u00e5n {site_name} har initierats till ditt bankkonto.",
+    "arrival_info": "Ber\u00e4knad ankomst: {estimated_arrival}. Observera att det kan ta 1\u20132 bankdagar.",
+    "cta": "Se betalnings\u00f6versikt",
+    "note": "Utbetalningar sker automatiskt via Stripe Connect baserat p\u00e5 ditt utbetalningsschema."
+  },
+
+  "payout_completed": {
+    "subject": "Utbetalning genomf\u00f6rd \u2014 {amount}",
+    "heading": "Utbetalning genomf\u00f6rd!",
+    "greeting": "Hej {name},",
+    "body": "Utbetalningen p\u00e5 {amount} fr\u00e5n {site_name} har nu n\u00e5tt ditt bankkonto.",
+    "info": "Beloppet borde nu synas p\u00e5 ditt kontoutdrag. Om du inte ser det inom 24 timmar, kontakta din bank.",
+    "cta": "Se betalnings\u00f6versikt"
+  },
+
+  "payout_failed": {
+    "subject": "Utbetalning misslyckades \u2014 {amount}",
+    "heading": "Utbetalningen misslyckades",
+    "greeting": "Hej {name},",
+    "body": "Utbetalningen p\u00e5 {amount} fr\u00e5n {site_name} kunde inte genomf\u00f6ras.",
+    "warning": "Kontrollera att dina bankuppgifter i Stripe \u00e4r korrekta. Stripe kommer att f\u00f6rs\u00f6ka igen automatiskt.",
+    "reason_label": "Orsak:",
+    "cta": "Kontrollera inst\u00e4llningar"
+  },
+
+  "chargeback_received": {
+    "subject": "Tvist mottagen \u2014 {amount}",
+    "heading": "En tvist har inkommit",
+    "greeting": "Hej {name},",
+    "body": "En kund har inlett en tvist (chargeback) g\u00e4llande en betalning fr\u00e5n {site_name}.",
+    "warning": "En tvist p\u00e5 {amount} har \u00f6ppnats av kunden {customer_name}.",
+    "reason_label": "Orsak:",
+    "respond_by_label": "Svara senast:",
+    "action_info": "Tvister m\u00e5ste besvaras inom tidsfristen. Samla bevis s\u00e5som bokningsbekr\u00e4ftelse, kommunikation med kunden och leveransbevis. Om tvisten f\u00f6rloras kommer beloppet att dras fr\u00e5n ditt saldo.",
+    "cta": "Hantera tvist"
+  },
+
+  "negative_balance_warning": {
+    "subject": "Varning: Negativt saldo p\u00e5 ditt konto",
+    "heading": "Negativt saldo",
+    "greeting": "Hej {name},",
+    "body": "Kontot kopplat till {site_name} har ett negativt saldo p\u00e5 {balance}. Detta kan bero p\u00e5 \u00e5terbetalningar eller tvister.",
+    "warning": "Det negativa saldot m\u00e5ste t\u00e4ckas. Kommande intjänta belopp kommer att anv\u00e4ndas f\u00f6r att t\u00e4cka skulden. Om det inte t\u00e4cks kan Stripe dra beloppet fr\u00e5n ditt bankkonto.",
+    "info": "F\u00f6r att l\u00f6sa detta kan du inv\u00e4nta inkommande betalningar som automatiskt kvittas mot skulden, eller kontakta oss f\u00f6r hj\u00e4lp.",
+    "cta": "Se ditt saldo"
+  },
+
+  "negative_balance_overdue": {
+    "subject": "Viktigt: Utest\u00e5ende saldo {balance}",
+    "heading": "Utest\u00e5ende saldo kr\u00e4ver \u00e5tg\u00e4rd",
+    "greeting": "Hej {name},",
+    "body": "Kontot kopplat till {site_name} har haft ett negativt saldo p\u00e5 {balance} i {days_negative}\u00a0dagar.",
+    "warning": "Betala utest\u00e5ende belopp omg\u00e5ende. Om saldot inte regleras kan Stripe vidta \u00e5tg\u00e4rder s\u00e5som att debitera ditt bankkonto eller begr\u00e4nsa ditt konto.",
+    "action_info": "Kontakta oss omedelbart om du inte kan reglera beloppet. Vi hj\u00e4lper dig att hitta en l\u00f6sning.",
+    "cta": "Reglera saldo"
+  },
+
+  "contact_owner": {
+    "subject": "Nytt meddelande fr\u00e5n {visitor_name} \u2014 {site_name}",
+    "heading": "Nytt kontaktformul\u00e4r",
+    "greeting": "Hej {name},",
+    "body": "N\u00e5gon har skickat ett meddelande via kontaktformul\u00e4ret p\u00e5 {site_name}.",
+    "from_label": "Fr\u00e5n",
+    "reply_note": "Svara direkt till {email} f\u00f6r att forts\u00e4tta konversationen."
+  },
+
+  "contact_visitor": {
+    "subject": "Vi har mottagit ditt meddelande \u2014 {site_name}",
+    "heading": "Tack f\u00f6r ditt meddelande!",
+    "greeting": "Hej {name},",
+    "body": "Tack f\u00f6r att du kontaktade {site_name}. Vi har tagit emot ditt meddelande och \u00e5terkommer s\u00e5 snart som m\u00f6jligt.",
+    "info": "Vi svarar normalt inom 24 timmar under vardagar.",
+    "footer": "Detta mail skickades p\u00e5 uppdrag av {site_name} via Qvicko."
   }
 }

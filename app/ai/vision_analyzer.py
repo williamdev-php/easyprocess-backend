@@ -12,8 +12,7 @@ import base64
 import json
 import logging
 
-import httpx
-
+from app.ai.generator import _get_http_client
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -125,50 +124,52 @@ async def analyze_screenshots(screenshot_bytes_list: list[dict]) -> dict | None:
     content.append({"type": "text", "text": _VISION_PROMPT})
 
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": settings.ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 4000,
-                    "messages": [{"role": "user", "content": content}],
-                    "temperature": 0.2,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        import httpx
 
-            text = data["content"][0]["text"].strip()
-            # Extract JSON from potential markdown code blocks
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
+        client = _get_http_client()
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": settings.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": 0.2,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-            # Find the JSON object in the text (skip any preamble/postamble)
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                text = text[start:end + 1]
+        text = data["content"][0]["text"].strip()
+        # Extract JSON from potential markdown code blocks
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
 
-            result = json.loads(text)
+        # Find the JSON object in the text (skip any preamble/postamble)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
 
-            tokens = data["usage"]["input_tokens"] + data["usage"]["output_tokens"]
-            logger.info(
-                "Vision analysis complete: tokens=%d, keys=%s, sections=%d",
-                tokens, list(result.keys()),
-                len(result.get("content_sections", [])),
-            )
+        result = json.loads(text)
 
-            return result
+        tokens = data["usage"]["input_tokens"] + data["usage"]["output_tokens"]
+        logger.info(
+            "Vision analysis complete: tokens=%d, keys=%s, sections=%d",
+            tokens, list(result.keys()),
+            len(result.get("content_sections", [])),
+        )
+
+        return result
 
     except httpx.TimeoutException:
-        logger.warning("Vision analysis timed out (90s limit)")
+        logger.warning("Vision analysis timed out")
         return None
     except httpx.HTTPStatusError as e:
         logger.warning(

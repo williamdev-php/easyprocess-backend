@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # Apple Sign-In
+    APPLE_CLIENT_ID: str = ""  # Your app's Bundle ID (e.g. com.qvicko.ios)
+
     # Stripe
     STRIPE_SECRET_KEY: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
@@ -92,6 +95,10 @@ class Settings(BaseSettings):
     STRIPE_PRICE_ID: str = ""  # Deprecated — use STRIPE_BASIC_PRICE_ID / STRIPE_PRO_PRICE_ID
     STRIPE_BASIC_PRICE_ID: str = ""
     STRIPE_PRO_PRICE_ID: str = ""
+
+    # Stripe Connect (for marketplace payments)
+    STRIPE_CONNECT_WEBHOOK_SECRET: str = ""
+    PLATFORM_FEE_PERCENT: float = 0.2  # Platform fee percentage per transaction (0.2%)
 
     # Viewer
     VIEWER_URL: str = "http://localhost:3001"

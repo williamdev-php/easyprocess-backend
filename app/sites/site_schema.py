@@ -540,6 +540,17 @@ class RankingData(BaseModel):
     items: list[RankingItem] = []
 
 
+class PageContentData(BaseModel):
+    """Rich-text content section for custom pages.
+
+    Stores sanitised HTML produced by the dashboard rich-text editor.
+    Designed to be the default section added when a user creates a new
+    custom page via the Pages management UI.
+    """
+    title: str = ""
+    content: str = ""  # sanitised HTML
+
+
 # ---------------------------------------------------------------------------
 # Section settings — per-section animation & display config
 # ---------------------------------------------------------------------------
@@ -671,6 +682,7 @@ class SiteSchema(BaseModel):
     custom_content: CustomContentData | None = None
     banner: BannerData | None = None
     ranking: RankingData | None = None
+    page_content: PageContentData | None = None
 
     # Duplicated sections — allows multiple instances of the same section type.
     # Keys are instance ids like "about__dup_1700000000000".

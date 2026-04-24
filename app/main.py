@@ -26,7 +26,8 @@ from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noq
 from app.tracking.models import TrackingEvent  # noqa: F401
 from app.support.models import SupportTicket  # noqa: F401
 from app.support.notifications import Notification  # noqa: F401
-from app.apps.models import App, AppInstallation, AppReview, BlogPost, BlogCategory, ChatConversation, ChatMessage  # noqa: F401
+from app.apps.models import App, AppInstallation, AppReview, BlogPost, BlogCategory, ChatConversation, ChatMessage, BookingService, BookingFormField, BookingPaymentMethods, Booking  # noqa: F401
+from app.payments.models import ConnectedAccount, PlatformPayment  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -53,11 +54,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             logger.warning("Supabase Storage bucket '%s' is NOT accessible — image storage will fail", settings.SUPABASE_STORAGE_BUCKET)
 
-    # Start stuck-lead recovery loop (every 5 minutes)
+    # Re-enqueue orphaned leads from previous server run, then start stuck recovery loop
+    async def _recover_orphaned_leads():
+        """Re-enqueue leads stuck in SCRAPING/GENERATING from a prior server crash."""
+        from app.sites.models import Lead, LeadStatus
+        from app.pipeline_manager import pipeline_manager
+        from sqlalchemy import select
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Lead).where(
+                        Lead.status.in_([LeadStatus.SCRAPING, LeadStatus.GENERATING])
+                    )
+                )
+                orphaned = result.scalars().all()
+                if orphaned:
+                    for lead in orphaned:
+                        lead.status = LeadStatus.NEW
+                        lead.error_message = None
+                    await session.commit()
+                    for lead in orphaned:
+                        accepted = await pipeline_manager.enqueue(str(lead.id))
+                        logger.info(
+                            "Re-enqueued orphaned lead %s (accepted=%s)", lead.id, accepted
+                        )
+                    logger.info("Re-enqueued %d orphaned leads at startup", len(orphaned))
+        except Exception:
+            logger.exception("Orphaned lead recovery failed at startup")
+
     async def _stuck_lead_recovery_loop():
         from app.sites.models import Lead, LeadStatus
         from sqlalchemy import select, and_
-        await asyncio.sleep(120)  # wait for app to stabilize
+        # On startup: re-enqueue orphaned leads first
+        await asyncio.sleep(5)  # brief delay for app init
+        await _recover_orphaned_leads()
+        # Then run periodic stuck detection
+        await asyncio.sleep(295)  # total ~5 min before first stuck check
         while True:
             try:
                 threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -184,6 +216,7 @@ from app.media.router import router as media_router  # noqa: E402
 from app.tracking.router import router as tracking_router  # noqa: E402
 from app.apps.router import router as apps_router  # noqa: E402
 from app.gsc.router import router as gsc_router  # noqa: E402
+from app.payments.router import router as payments_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -194,6 +227,7 @@ app.include_router(media_router)
 app.include_router(tracking_router)
 app.include_router(apps_router)
 app.include_router(gsc_router)
+app.include_router(payments_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

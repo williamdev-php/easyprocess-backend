@@ -23,9 +23,16 @@ from app.apps.models import (
     BlogCategory,
     BlogPost,
     BlogPostStatus,
+    Booking,
+    BookingFormField,
+    BookingPaymentMethods,
+    BookingPaymentStatus,
+    BookingService,
+    BookingStatus,
     ChatConversation,
     ChatMessage,
 )
+from app.payments.models import ConnectedAccount
 from app.apps.graphql_types import (
     AppInstallationType,
     AppPricingTypeGQL,
@@ -36,6 +43,15 @@ from app.apps.graphql_types import (
     BlogPostListType,
     BlogPostStatusGQL,
     BlogPostType,
+    BookingFilterInput,
+    BookingListType,
+    BookingPaymentMethodsType,
+    BookingPaymentStatusGQL,
+    BookingServiceType,
+    BookingStatsType,
+    BookingStatusGQL,
+    BookingType,
+    BookingFormFieldType,
     ChatConversationDetailType,
     ChatConversationFilterInput,
     ChatConversationListType,
@@ -43,15 +59,22 @@ from app.apps.graphql_types import (
     ChatConversationType,
     ChatMessageType,
     ChatSenderTypeGQL,
+    ConnectedAccountType,
     CreateAppReviewInput,
     CreateBlogCategoryInput,
     CreateBlogPostInput,
+    CreateBookingFormFieldInput,
+    CreateBookingServiceInput,
     DeleteAppReviewInput,
     InstallAppInput,
     SendChatReplyInput,
     UninstallAppInput,
     UpdateBlogCategoryInput,
     UpdateBlogPostInput,
+    UpdateBookingFormFieldInput,
+    UpdateBookingPaymentMethodsInput,
+    UpdateBookingServiceInput,
+    UpdateBookingStatusInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,6 +202,7 @@ def _app_to_gql(app: App, avg_rating: float = 0, review_count: int = 0) -> AppTy
         price=float(app.price) if app.price else 0,
         price_description=app.price_description,
         install_count=app.install_count or 0,
+        requires_payments=app.requires_payments,
         avg_rating=avg_rating,
         review_count=review_count,
     )
@@ -209,6 +233,7 @@ def _installation_to_gql(inst: AppInstallation) -> AppInstallationType:
         is_active=inst.is_active,
         settings=inst.settings,
         sidebar_links=inst.app.sidebar_links,
+        requires_payments=inst.app.requires_payments,
         installed_at=inst.installed_at,
     )
 
@@ -244,6 +269,90 @@ def _category_to_gql(cat: BlogCategory, post_count: int = 0) -> BlogCategoryType
         post_count=post_count,
         created_at=cat.created_at,
         updated_at=cat.updated_at,
+    )
+
+
+async def _require_bookings_installed(site_id: str) -> None:
+    """Verify the bookings app is installed on the given site."""
+    async with get_db_session() as db:
+        result = await db.execute(
+            select(AppInstallation)
+            .join(App, AppInstallation.app_id == App.id)
+            .where(
+                App.slug == "bookings",
+                AppInstallation.site_id == site_id,
+                AppInstallation.is_active == True,  # noqa: E712
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise ValueError("Bookings app is not installed on this site")
+
+
+def _service_to_gql(service: BookingService) -> BookingServiceType:
+    return BookingServiceType(
+        id=service.id,
+        site_id=service.site_id,
+        name=service.name,
+        description=service.description,
+        duration_minutes=service.duration_minutes,
+        price=float(service.price) if service.price else 0,
+        currency=service.currency,
+        is_active=service.is_active,
+        sort_order=service.sort_order,
+        created_at=service.created_at,
+        updated_at=service.updated_at,
+    )
+
+
+def _form_field_to_gql(field: BookingFormField) -> BookingFormFieldType:
+    return BookingFormFieldType(
+        id=field.id,
+        site_id=field.site_id,
+        label=field.label,
+        field_type=field.field_type,
+        placeholder=field.placeholder,
+        is_required=field.is_required,
+        options=field.options,
+        sort_order=field.sort_order,
+        is_active=field.is_active,
+        created_at=field.created_at,
+        updated_at=field.updated_at,
+    )
+
+
+def _payment_methods_to_gql(pm: BookingPaymentMethods) -> BookingPaymentMethodsType:
+    return BookingPaymentMethodsType(
+        id=pm.id,
+        site_id=pm.site_id,
+        stripe_connect_enabled=pm.stripe_connect_enabled,
+        on_site_enabled=pm.on_site_enabled,
+        klarna_enabled=pm.klarna_enabled,
+        swish_enabled=pm.swish_enabled,
+        created_at=pm.created_at,
+        updated_at=pm.updated_at,
+    )
+
+
+def _booking_to_gql(booking: Booking) -> BookingType:
+    return BookingType(
+        id=booking.id,
+        site_id=booking.site_id,
+        service_id=booking.service_id,
+        service_name=booking.service_name if hasattr(booking, "service_name") and booking.service_name else (booking.service.name if booking.service else None),
+        customer_name=booking.customer_name,
+        customer_email=booking.customer_email,
+        customer_phone=booking.customer_phone,
+        form_data=booking.form_data,
+        status=BookingStatusGQL(booking.status.value),
+        payment_method=booking.payment_method,
+        payment_status=BookingPaymentStatusGQL(booking.payment_status.value),
+        stripe_payment_intent_id=booking.stripe_payment_intent_id,
+        amount=float(booking.amount) if booking.amount else 0,
+        currency=booking.currency,
+        notes=booking.notes,
+        booking_date=booking.booking_date,
+        created_at=booking.created_at,
+        updated_at=booking.updated_at,
     )
 
 
@@ -530,6 +639,188 @@ class Query:
             return ChatConversationDetailType(
                 conversation=_conversation_to_gql(conv, len(messages)),
                 messages=[_message_to_gql(m) for m in messages],
+            )
+
+    # -------------------------------------------------------------------
+    # Bookings
+    # -------------------------------------------------------------------
+
+    @strawberry.field
+    async def booking_services(self, info: Info, site_id: str) -> list[BookingServiceType]:
+        """List booking services for a site. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        await _require_bookings_installed(site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingService)
+                .where(BookingService.site_id == site_id)
+                .order_by(BookingService.sort_order, BookingService.name)
+            )
+            return [_service_to_gql(s) for s in result.scalars().all()]
+
+    @strawberry.field
+    async def booking_form_fields(self, info: Info, site_id: str) -> list[BookingFormFieldType]:
+        """List booking form fields for a site. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        await _require_bookings_installed(site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingFormField)
+                .where(BookingFormField.site_id == site_id)
+                .order_by(BookingFormField.sort_order, BookingFormField.label)
+            )
+            return [_form_field_to_gql(f) for f in result.scalars().all()]
+
+    @strawberry.field
+    async def booking_payment_methods(self, info: Info, site_id: str) -> BookingPaymentMethodsType:
+        """Get payment methods config for a site. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        await _require_bookings_installed(site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingPaymentMethods)
+                .where(BookingPaymentMethods.site_id == site_id)
+            )
+            pm = result.scalar_one_or_none()
+            if pm is None:
+                pm = BookingPaymentMethods(site_id=site_id)
+                db.add(pm)
+                await db.flush()
+            return _payment_methods_to_gql(pm)
+
+    @strawberry.field
+    async def bookings(
+        self, info: Info, site_id: str, filter: BookingFilterInput | None = None
+    ) -> BookingListType:
+        """List bookings for a site with filtering. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        await _require_bookings_installed(site_id)
+        f = filter or BookingFilterInput()
+        async with get_db_session() as db:
+            from sqlalchemy.orm import selectinload
+            base = (
+                select(Booking)
+                .options(selectinload(Booking.service))
+                .where(Booking.site_id == site_id)
+            )
+            count_base = select(func.count(Booking.id)).where(Booking.site_id == site_id)
+
+            if f.status:
+                base = base.where(Booking.status == BookingStatus(f.status.value))
+                count_base = count_base.where(Booking.status == BookingStatus(f.status.value))
+            if f.payment_status:
+                base = base.where(Booking.payment_status == BookingPaymentStatus(f.payment_status.value))
+                count_base = count_base.where(Booking.payment_status == BookingPaymentStatus(f.payment_status.value))
+            if f.search:
+                pattern = f"%{f.search}%"
+                search_filter = or_(
+                    Booking.customer_name.ilike(pattern),
+                    Booking.customer_email.ilike(pattern),
+                )
+                base = base.where(search_filter)
+                count_base = count_base.where(search_filter)
+
+            total_result = await db.execute(count_base)
+            total = total_result.scalar() or 0
+
+            offset = (f.page - 1) * f.page_size
+            result = await db.execute(
+                base.order_by(Booking.created_at.desc())
+                .offset(offset)
+                .limit(f.page_size)
+            )
+            bookings = result.scalars().all()
+            return BookingListType(
+                items=[_booking_to_gql(b) for b in bookings],
+                total=total,
+                page=f.page,
+                page_size=f.page_size,
+            )
+
+    @strawberry.field
+    async def booking(self, info: Info, site_id: str, booking_id: str) -> BookingType | None:
+        """Get a single booking. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        async with get_db_session() as db:
+            from sqlalchemy.orm import selectinload
+            result = await db.execute(
+                select(Booking)
+                .options(selectinload(Booking.service))
+                .where(Booking.id == booking_id, Booking.site_id == site_id)
+            )
+            booking = result.scalar_one_or_none()
+            return _booking_to_gql(booking) if booking else None
+
+    @strawberry.field
+    async def booking_stats(self, info: Info, site_id: str) -> BookingStatsType:
+        """Get aggregate booking stats. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        await _require_bookings_installed(site_id)
+        async with get_db_session() as db:
+            # Total count
+            total_result = await db.execute(
+                select(func.count(Booking.id)).where(Booking.site_id == site_id)
+            )
+            total = total_result.scalar() or 0
+
+            # Counts by status
+            status_result = await db.execute(
+                select(Booking.status, func.count(Booking.id))
+                .where(Booking.site_id == site_id)
+                .group_by(Booking.status)
+            )
+            status_counts = {row[0]: row[1] for row in status_result.all()}
+
+            # Total revenue (from PAID bookings)
+            revenue_result = await db.execute(
+                select(func.coalesce(func.sum(Booking.amount), 0))
+                .where(
+                    Booking.site_id == site_id,
+                    Booking.payment_status == BookingPaymentStatus.PAID,
+                )
+            )
+            total_revenue = float(revenue_result.scalar() or 0)
+
+            # Get default currency from first booking or default
+            currency_result = await db.execute(
+                select(Booking.currency)
+                .where(Booking.site_id == site_id)
+                .limit(1)
+            )
+            currency = currency_result.scalar_one_or_none() or "SEK"
+
+            return BookingStatsType(
+                total_bookings=total,
+                pending_count=status_counts.get(BookingStatus.PENDING, 0),
+                confirmed_count=status_counts.get(BookingStatus.CONFIRMED, 0),
+                completed_count=status_counts.get(BookingStatus.COMPLETED, 0),
+                cancelled_count=status_counts.get(BookingStatus.CANCELLED, 0),
+                total_revenue=total_revenue,
+                currency=currency,
+            )
+
+    @strawberry.field
+    async def connected_account(self, info: Info, site_id: str) -> ConnectedAccountType | None:
+        """Get Stripe Connect account status. Requires site ownership."""
+        await _require_site_owner(info, site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(ConnectedAccount).where(ConnectedAccount.site_id == site_id)
+            )
+            acct = result.scalar_one_or_none()
+            if acct is None:
+                return None
+            return ConnectedAccountType(
+                id=acct.id,
+                site_id=acct.site_id,
+                stripe_account_id=acct.stripe_account_id,
+                onboarding_status=acct.onboarding_status,
+                charges_enabled=acct.charges_enabled,
+                payouts_enabled=acct.payouts_enabled,
+                details_submitted=acct.details_submitted,
+                country=acct.country,
+                created_at=acct.created_at,
+                updated_at=acct.updated_at,
             )
 
 
@@ -1001,6 +1292,271 @@ class Mutation:
             conv.status = "open"
             conv.updated_at = datetime.now(timezone.utc)
         return True
+
+    # -----------------------------------------------------------------------
+    # Booking services
+    # -----------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def create_booking_service(self, info: Info, input: CreateBookingServiceInput) -> BookingServiceType:
+        await _require_site_owner(info, input.site_id)
+        await _require_bookings_installed(input.site_id)
+        async with get_db_session() as db:
+            service = BookingService(
+                site_id=input.site_id,
+                name=input.name,
+                description=input.description,
+                duration_minutes=input.duration_minutes,
+                price=input.price,
+                currency=input.currency,
+            )
+            db.add(service)
+            await db.flush()
+            return _service_to_gql(service)
+
+    @strawberry.mutation
+    async def update_booking_service(self, info: Info, input: UpdateBookingServiceInput) -> BookingServiceType:
+        await _require_site_owner(info, input.site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingService).where(
+                    BookingService.id == input.id,
+                    BookingService.site_id == input.site_id,
+                )
+            )
+            service = result.scalar_one_or_none()
+            if service is None:
+                raise ValueError("Booking service not found")
+
+            if input.name is not None:
+                service.name = input.name
+            if input.description is not None:
+                service.description = input.description
+            if input.duration_minutes is not None:
+                service.duration_minutes = input.duration_minutes
+            if input.price is not None:
+                service.price = input.price
+            if input.currency is not None:
+                service.currency = input.currency
+            if input.is_active is not None:
+                service.is_active = input.is_active
+            if input.sort_order is not None:
+                service.sort_order = input.sort_order
+
+            service.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+            return _service_to_gql(service)
+
+    @strawberry.mutation
+    async def delete_booking_service(self, info: Info, site_id: str, service_id: str) -> bool:
+        await _require_site_owner(info, site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingService).where(
+                    BookingService.id == service_id,
+                    BookingService.site_id == site_id,
+                )
+            )
+            service = result.scalar_one_or_none()
+            if service is None:
+                raise ValueError("Booking service not found")
+            await db.delete(service)
+        return True
+
+    # -----------------------------------------------------------------------
+    # Booking form fields
+    # -----------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def create_booking_form_field(self, info: Info, input: CreateBookingFormFieldInput) -> BookingFormFieldType:
+        await _require_site_owner(info, input.site_id)
+        await _require_bookings_installed(input.site_id)
+        async with get_db_session() as db:
+            field = BookingFormField(
+                site_id=input.site_id,
+                label=input.label,
+                field_type=input.field_type,
+                placeholder=input.placeholder,
+                is_required=input.is_required,
+                options=input.options,
+            )
+            db.add(field)
+            await db.flush()
+            return _form_field_to_gql(field)
+
+    @strawberry.mutation
+    async def update_booking_form_field(self, info: Info, input: UpdateBookingFormFieldInput) -> BookingFormFieldType:
+        await _require_site_owner(info, input.site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingFormField).where(
+                    BookingFormField.id == input.id,
+                    BookingFormField.site_id == input.site_id,
+                )
+            )
+            field = result.scalar_one_or_none()
+            if field is None:
+                raise ValueError("Booking form field not found")
+
+            if input.label is not None:
+                field.label = input.label
+            if input.field_type is not None:
+                field.field_type = input.field_type
+            if input.placeholder is not None:
+                field.placeholder = input.placeholder
+            if input.is_required is not None:
+                field.is_required = input.is_required
+            if input.options is not None:
+                field.options = input.options
+            if input.sort_order is not None:
+                field.sort_order = input.sort_order
+            if input.is_active is not None:
+                field.is_active = input.is_active
+
+            field.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+            return _form_field_to_gql(field)
+
+    @strawberry.mutation
+    async def delete_booking_form_field(self, info: Info, site_id: str, field_id: str) -> bool:
+        await _require_site_owner(info, site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingFormField).where(
+                    BookingFormField.id == field_id,
+                    BookingFormField.site_id == site_id,
+                )
+            )
+            field = result.scalar_one_or_none()
+            if field is None:
+                raise ValueError("Booking form field not found")
+            await db.delete(field)
+        return True
+
+    # -----------------------------------------------------------------------
+    # Booking payment methods
+    # -----------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def update_booking_payment_methods(self, info: Info, input: UpdateBookingPaymentMethodsInput) -> BookingPaymentMethodsType:
+        await _require_site_owner(info, input.site_id)
+        await _require_bookings_installed(input.site_id)
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(BookingPaymentMethods).where(
+                    BookingPaymentMethods.site_id == input.site_id,
+                )
+            )
+            pm = result.scalar_one_or_none()
+            if pm is None:
+                pm = BookingPaymentMethods(site_id=input.site_id)
+                db.add(pm)
+                await db.flush()
+
+            if input.stripe_connect_enabled is not None:
+                pm.stripe_connect_enabled = input.stripe_connect_enabled
+            if input.on_site_enabled is not None:
+                pm.on_site_enabled = input.on_site_enabled
+            if input.klarna_enabled is not None:
+                pm.klarna_enabled = input.klarna_enabled
+            if input.swish_enabled is not None:
+                pm.swish_enabled = input.swish_enabled
+
+            pm.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+            return _payment_methods_to_gql(pm)
+
+    # -----------------------------------------------------------------------
+    # Booking status
+    # -----------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def update_booking_status(self, info: Info, input: UpdateBookingStatusInput) -> BookingType:
+        await _require_site_owner(info, input.site_id)
+        async with get_db_session() as db:
+            from sqlalchemy.orm import selectinload
+            result = await db.execute(
+                select(Booking)
+                .options(selectinload(Booking.service))
+                .where(
+                    Booking.id == input.id,
+                    Booking.site_id == input.site_id,
+                )
+            )
+            booking = result.scalar_one_or_none()
+            if booking is None:
+                raise ValueError("Booking not found")
+
+            booking.status = BookingStatus(input.status.value)
+            if input.notes is not None:
+                booking.notes = input.notes
+            booking.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+
+            # Send status change email to customer
+            if input.status in (BookingStatusGQL.CONFIRMED, BookingStatusGQL.CANCELLED, BookingStatusGQL.COMPLETED):
+                try:
+                    from app.email.service import send_transactional_email
+                    from app.email.booking_templates import (
+                        build_booking_confirmed_email,
+                        build_booking_cancelled_email,
+                        build_booking_completed_email,
+                    )
+                    from app.sites.models import GeneratedSite
+
+                    site_result = await db.execute(
+                        select(GeneratedSite).where(GeneratedSite.id == input.site_id)
+                    )
+                    site = site_result.scalar_one_or_none()
+                    site_name = "din webbplats"
+                    if site and site.site_data:
+                        site_name = site.site_data.get("business", {}).get("name") or site.site_data.get("meta", {}).get("title") or site_name
+
+                    service_name = booking.service_name or (booking.service.name if booking.service else "")
+                    booking_date_str = booking.booking_date.strftime("%Y-%m-%d %H:%M") if booking.booking_date else "Ej angivet"
+
+                    if input.status == BookingStatusGQL.CONFIRMED:
+                        subj, html, text = build_booking_confirmed_email(
+                            customer_name=booking.customer_name,
+                            site_name=site_name,
+                            service_name=service_name,
+                            booking_date=booking_date_str,
+                            amount=float(booking.amount),
+                            currency=booking.currency,
+                        )
+                    elif input.status == BookingStatusGQL.CANCELLED:
+                        subj, html, text = build_booking_cancelled_email(
+                            customer_name=booking.customer_name,
+                            site_name=site_name,
+                            service_name=service_name,
+                            booking_date=booking_date_str,
+                        )
+                    else:  # COMPLETED
+                        subj, html, text = build_booking_completed_email(
+                            customer_name=booking.customer_name,
+                            site_name=site_name,
+                            service_name=service_name,
+                            booking_date=booking_date_str,
+                        )
+
+                    await send_transactional_email(
+                        to=booking.customer_email,
+                        subject=subj,
+                        html=html,
+                        text=text,
+                        from_name="Bookings by Qvicko",
+                    )
+                except Exception:
+                    logger.exception("Failed to send booking status email")
+
+            # Reload to get fresh data
+            result = await db.execute(
+                select(Booking)
+                .options(selectinload(Booking.service))
+                .where(Booking.id == booking.id)
+            )
+            booking = result.scalar_one()
+            return _booking_to_gql(booking)
 
 
 # Fix missing import

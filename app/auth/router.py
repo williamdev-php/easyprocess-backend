@@ -29,7 +29,9 @@ from app.auth.service import (
     create_session,
     create_user,
     exchange_google_code,
+    fetch_google_userinfo,
     get_client_ip,
+    get_or_create_apple_user,
     get_or_create_google_user,
     get_user_by_email,
     get_user_by_id,
@@ -44,6 +46,7 @@ from app.auth.service import (
     validate_email_verification_token,
     validate_password_reset_token,
     validate_session,
+    verify_apple_identity_token,
     verify_password,
 )
 from app.config import settings
@@ -193,19 +196,31 @@ async def google_auth(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    """Authenticate with Google OAuth. Accepts {code, redirect_uri, locale?}."""
+    """Authenticate with Google OAuth.
+
+    Web flow: {code, redirect_uri, locale?}
+    iOS flow: {access_token, locale?}
+    """
     code = body.get("code")
     redirect_uri = body.get("redirect_uri")
+    google_access_token = body.get("access_token")
     locale = body.get("locale", "sv")
 
-    if not code or not redirect_uri:
-        raise HTTPException(status_code=400, detail="Missing code or redirect_uri")
+    if not code and not google_access_token:
+        raise HTTPException(status_code=400, detail="Missing code or access_token")
 
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=501, detail="Google login is not configured")
 
     try:
-        google_user = await exchange_google_code(code, redirect_uri)
+        if google_access_token:
+            # iOS flow: SDK already exchanged the code, we just need user info
+            google_user = await fetch_google_userinfo(google_access_token)
+        else:
+            # Web flow: exchange authorization code for tokens
+            if not redirect_uri:
+                raise HTTPException(status_code=400, detail="Missing redirect_uri for code flow")
+            google_user = await exchange_google_code(code, redirect_uri)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -237,6 +252,68 @@ async def google_auth(
 
 
 # ---------------------------------------------------------------------------
+# Apple Sign-In
+# ---------------------------------------------------------------------------
+
+
+@router.post("/apple", response_model=TokenResponse)
+@limiter.limit("10/minute")
+async def apple_auth(
+    body: dict,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """Authenticate with Apple Sign-In. Accepts {identity_token, full_name?, email?, locale?}."""
+    identity_token = body.get("identity_token")
+    full_name = body.get("full_name")
+    email_hint = body.get("email")
+    locale = body.get("locale", "sv")
+
+    if not identity_token:
+        raise HTTPException(status_code=400, detail="Missing identity_token")
+
+    if not settings.APPLE_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="Apple Sign-In is not configured")
+
+    try:
+        apple_claims = await verify_apple_identity_token(identity_token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not apple_claims.get("sub"):
+        raise HTTPException(status_code=400, detail="Invalid Apple token — no subject")
+
+    user = await get_or_create_apple_user(
+        db, apple_claims,
+        full_name=full_name,
+        email_hint=email_hint,
+        locale=locale,
+    )
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account deactivated")
+
+    ip = get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
+    await reset_failed_logins(db, user)
+    await invalidate_user_cache(user.id, user.email)
+
+    session, raw_token = await create_session(
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+    )
+    await log_audit_event(
+        db, AuditEventType.LOGIN, user.id, ip, ua,
+        {"provider": "apple"},
+    )
+
+    access_token = create_access_token(user.id)
+    _set_refresh_cookie(response, raw_token, is_trusted=session.is_trusted)
+    return TokenResponse(access_token=access_token)
+
+
+# ---------------------------------------------------------------------------
 # Token refresh & Logout
 # ---------------------------------------------------------------------------
 
@@ -247,7 +324,14 @@ async def refresh(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
+    # Support both cookie (web) and body (iOS) refresh tokens
     raw_token = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw_token:
+        try:
+            body = await request.json()
+            raw_token = body.get("refresh_token")
+        except Exception:
+            pass
     if not raw_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
 
@@ -290,6 +374,12 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     raw_token = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not raw_token:
+        try:
+            body = await request.json()
+            raw_token = body.get("refresh_token")
+        except Exception:
+            pass
     if raw_token:
         session = await validate_session(db, raw_token)
         if session:

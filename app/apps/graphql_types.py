@@ -50,6 +50,7 @@ class AppType:
     price: float = 0
     price_description: str | None = None
     install_count: int = 0
+    requires_payments: bool = False
     avg_rating: float = 0
     review_count: int = 0
 
@@ -64,6 +65,7 @@ class AppInstallationType:
     is_active: bool = True
     settings: JSON | None = None
     sidebar_links: JSON | None = None
+    requires_payments: bool = False
     installed_at: datetime | None = None
 
 
@@ -283,3 +285,200 @@ class SendChatReplyInput:
     conversation_id: str
     site_id: str
     content: str
+
+
+# ---------------------------------------------------------------------------
+# Booking enums
+# ---------------------------------------------------------------------------
+
+@strawberry.enum
+class BookingStatusGQL(enum.Enum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    CANCELLED = "CANCELLED"
+    COMPLETED = "COMPLETED"
+
+
+@strawberry.enum
+class BookingPaymentStatusGQL(enum.Enum):
+    UNPAID = "UNPAID"
+    PAID = "PAID"
+    REFUNDED = "REFUNDED"
+    FAILED = "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# Booking types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class BookingServiceType:
+    id: str
+    site_id: str
+    name: str
+    description: str | None = None
+    duration_minutes: int = 60
+    price: float = 0
+    currency: str = "SEK"
+    is_active: bool = True
+    sort_order: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@strawberry.type
+class BookingFormFieldType:
+    id: str
+    site_id: str
+    label: str
+    field_type: str
+    placeholder: str | None = None
+    is_required: bool = False
+    options: JSON | None = None
+    sort_order: int = 0
+    is_active: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@strawberry.type
+class BookingPaymentMethodsType:
+    id: str
+    site_id: str
+    stripe_connect_enabled: bool = False
+    on_site_enabled: bool = True
+    klarna_enabled: bool = False
+    swish_enabled: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@strawberry.type
+class BookingType:
+    id: str
+    site_id: str
+    service_id: str | None = None
+    service_name: str | None = None
+    customer_name: str
+    customer_email: str
+    customer_phone: str | None = None
+    form_data: JSON | None = None
+    status: BookingStatusGQL = BookingStatusGQL.PENDING
+    payment_method: str | None = None
+    payment_status: BookingPaymentStatusGQL = BookingPaymentStatusGQL.UNPAID
+    stripe_payment_intent_id: str | None = None
+    amount: float = 0
+    currency: str = "SEK"
+    notes: str | None = None
+    booking_date: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@strawberry.type
+class BookingListType:
+    items: list[BookingType]
+    total: int
+    page: int
+    page_size: int
+
+
+@strawberry.type
+class BookingStatsType:
+    total_bookings: int
+    pending_count: int
+    confirmed_count: int
+    completed_count: int
+    cancelled_count: int
+    total_revenue: float
+    currency: str
+
+
+@strawberry.type
+class ConnectedAccountType:
+    id: str
+    site_id: str
+    stripe_account_id: str
+    onboarding_status: str
+    charges_enabled: bool = False
+    payouts_enabled: bool = False
+    details_submitted: bool = False
+    country: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Booking input types
+# ---------------------------------------------------------------------------
+
+@strawberry.input
+class CreateBookingServiceInput:
+    site_id: str
+    name: str
+    description: str | None = None
+    duration_minutes: int = 60
+    price: float = 0
+    currency: str = "SEK"
+
+
+@strawberry.input
+class UpdateBookingServiceInput:
+    id: str
+    site_id: str
+    name: str | None = None
+    description: str | None = None
+    duration_minutes: int | None = None
+    price: float | None = None
+    currency: str | None = None
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+@strawberry.input
+class CreateBookingFormFieldInput:
+    site_id: str
+    label: str
+    field_type: str
+    placeholder: str | None = None
+    is_required: bool = False
+    options: JSON | None = None
+
+
+@strawberry.input
+class UpdateBookingFormFieldInput:
+    id: str
+    site_id: str
+    label: str | None = None
+    field_type: str | None = None
+    placeholder: str | None = None
+    is_required: bool | None = None
+    options: JSON | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+@strawberry.input
+class UpdateBookingPaymentMethodsInput:
+    site_id: str
+    stripe_connect_enabled: bool | None = None
+    on_site_enabled: bool | None = None
+    klarna_enabled: bool | None = None
+    swish_enabled: bool | None = None
+
+
+@strawberry.input
+class BookingFilterInput:
+    status: BookingStatusGQL | None = None
+    payment_status: BookingPaymentStatusGQL | None = None
+    search: str | None = None
+    page: int = 1
+    page_size: int = 20
+
+
+@strawberry.input
+class UpdateBookingStatusInput:
+    id: str
+    site_id: str
+    status: BookingStatusGQL
+    notes: str | None = None

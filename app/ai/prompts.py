@@ -134,20 +134,7 @@ STRATEGI:
 4. Om startsidan har services-snippet → skapa en /tjanster sida med alla tjänster i detalj.
 5. Kontaktsida är nästan alltid relevant som egen sida.
 
-TILLGÄNGLIGA STILVARIANTER:
-─────────────────────────────
-Variant 0 — Original:
-  Rundade kort (rounded-2xl), centrerade rubriker, gradient-blobbar, vertikal timeline, accordion-FAQ.
-
-Variant 1 — Modern Cards:
-  Mjuka skuggor (rounded-xl), kort-baserad process, citat-stil testimonials, featured galleri.
-
-Variant 2 — Clean & Minimal:
-  Vänsterjusterade rubriker, inga blobbar, liten radius, FAQ i två kolumner, split CTA.
-
-Variant 3 — Bold & Filled:
-  Inga borders, stora skuggor (shadow-lg), pill-knappar, masonry-galleri, glasmorfism-CTA.
-─────────────────────────────"""
+"""
 
 USER_PROMPT_TEMPLATE = """Skapa en komplett hemsida i JSON-format för detta företag.
 
@@ -224,171 +211,43 @@ VISUELL ANALYS AV BEFINTLIG HEMSIDA
 
 ═════��═════════════════════════════════
 JSON-SCHEMA ATT FYLLA I
-═══════��═══════════════════════════════
 
-VIKTIGT:
-- Svara med ENBART valid JSON
-- Använd de tillhandahållna bild-URL:erna. Hitta INTE PÅ nya.
-- Inkludera INTE "navigation" eller "footer" — det genereras automatiskt
-- Skriv KORTFATTAT — about max 120 ord, beskrivningar max 2 meningar
-- Inkludera "section_settings" med varierade animationer per sektion
-- Inkludera BARA sektioner som är relevanta — välj INTELLIGENT baserat på kontext
-- Sektioner du INTE inkluderar ska sättas till null eller utelämnas helt
-- Inkludera "ranking" om sidan handlar om jämförelser/toplistor/bäst-i-test
-- Inkludera "pages" med 2-4 undersidor. Startsidan = snippets, undersidor = fullständigt innehåll
+VIKTIGT: Svara med ENBART valid JSON. Använd BARA tillhandahållna bild-URL:er. Inkludera INTE navigation/footer. Skriv KORTFATTAT. Inkludera "section_settings" med varierade animationer. Välj BARA relevanta sektioner. Inkludera "pages" med 2-4 undersidor.
 
-{{
-  "meta": {{
-    "title": "Företagsnamn | Kort beskrivning",
-    "description": "150-160 tecken lång SEO-beskrivning",
-    "keywords": ["nyckelord1", "nyckelord2"],
-    "language": "sv"
-  }},
-  "theme": "modern",
-  "branding": {{
-    "logo_url": "{logo_url}",
-    "colors": {{
-      "primary": "#hex",
-      "secondary": "#hex",
-      "accent": "#hex",
-      "background": "#hex",
-      "text": "#hex"
-    }},
-    "fonts": {{ "heading": "Inter", "body": "Inter" }}
-  }},
-  "business": {{
-    "name": "", "tagline": "Kort slogan 5-8 ord",
-    "email": "", "phone": "", "address": "",
-    "org_number": null,
-    "social_links": {{}}
-  }},
-  "section_order": ["hero", "about", "services", "..."],
-  "section_settings": {{
-    "hero": {{"animation": "fade-in"}},
-    "about": {{"animation": "slide-right"}},
-    "services": {{"animation": "fade-up"}}
-  }},
-  "hero": {{
-    "headline": "Kraftfull rubrik, max 8 ord",
-    "subtitle": "1-2 meningar som förklarar vad företaget gör",
-    "cta": {{ "label": "Tydlig CTA-text", "href": "/kontakt" }},
-    "background_image": null
-  }},
-  "about": {{
-    "title": "Om oss",
-    "text": "80-120 ord om företaget.",
-    "image": null,
-    "highlights": [
-      {{ "label": "Beskrivning", "value": "Nyckeltal" }}
-    ]
-  }},
-  "features": {{
-    "title": "Varför välja oss",
-    "subtitle": "Kort beskrivning",
-    "items": [
-      {{ "title": "Fördel", "description": "Max 2 meningar" }}
-    ]
-  }},
-  "stats": {{
-    "title": "",
-    "items": [
-      {{ "value": "500+", "label": "Nöjda kunder" }}
-    ]
-  }},
-  "services": {{
-    "title": "Våra tjänster",
-    "subtitle": "Kort intro",
-    "items": [
-      {{ "title": "Tjänst", "description": "Max 2 meningar" }}
-    ]
-  }},
-  "process": {{
-    "title": "Så fungerar det",
-    "subtitle": "",
-    "steps": [
-      {{ "title": "Steg 1", "description": "Kort beskrivning", "step_number": 1 }}
-    ]
-  }},
-  "gallery": {{
-    "title": "Våra projekt",
-    "subtitle": "",
-    "images": [
-      {{ "url": "bild-url-från-listan", "alt": "Alt-text", "caption": "" }}
-    ]
-  }},
-  "team": {{
-    "title": "Möt teamet",
-    "subtitle": "",
-    "members": [
-      {{ "name": "Namn", "role": "Roll", "image": null, "bio": "1 mening" }}
-    ]
-  }},
-  "testimonials": {{
-    "title": "Vad våra kunder säger",
-    "subtitle": "",
-    "items": [
-      {{ "text": "2-3 meningar recension", "author": "Svenskt namn", "role": "Kund" }}
-    ]
-  }},
-  "faq": {{
-    "title": "Vanliga frågor",
-    "subtitle": "",
-    "items": [
-      {{ "question": "Fråga?", "answer": "1-2 meningar svar" }}
-    ]
-  }},
-  "cta": {{
-    "title": "Redo att komma igång?",
-    "text": "1 mening",
-    "button": {{ "label": "CTA-text", "href": "/kontakt" }}
-  }},
-  "contact": {{
-    "title": "Kontakta oss",
-    "text": "1 mening"
-  }},
-  "pricing": null,
-  "video": null,
-  "logo_cloud": null,
-  "custom_content": null,
-  "banner": null,
-  "ranking": {{
-    "title": "Topp 5 bästa ...",
-    "subtitle": "Kort intro",
-    "items": [
-      {{ "rank": 1, "title": "Namn", "description": "Kort beskrivning", "image": null, "link": {{ "label": "Besök", "href": "https://..." }} }}
-    ]
-  }},
-  "pages": [
-    {{
-      "slug": "om-oss",
-      "title": "Om oss",
-      "meta": {{ "title": "Om oss | Företagsnamn", "description": "Läs mer om oss." }},
-      "sections": [
-        {{ "type": "about", "data": {{ "title": "Om oss", "text": "Fullständig om oss-text, 80-120 ord." }} }},
-        {{ "type": "stats", "data": {{ "title": "", "items": [{{ "value": "10+", "label": "År i branschen" }}] }} }}
-      ],
-      "parent_slug": null,
-      "show_in_nav": true,
-      "nav_order": 1
-    }},
-    {{
-      "slug": "kontakt",
-      "title": "Kontakta oss",
-      "meta": {{ "title": "Kontakt | Företagsnamn", "description": "Kontakta oss." }},
-      "sections": [
-        {{ "type": "contact", "data": {{ "title": "Kontakta oss", "text": "Vi svarar inom 24h." }} }}
-      ],
-      "parent_slug": null,
-      "show_in_nav": true,
-      "nav_order": 10
-    }}
-  ],
-  "seo": {{
-    "structured_data": {{}},
-    "robots": "index, follow"
-  }},
-  "install_apps": []
-}}"""
+STRUKTUR (fyll i alla relevanta fält, sätt irrelevanta sektioner till null):
+
+meta: {{title, description, keywords[], language: "sv"}}
+theme: "modern"
+branding: {{logo_url: "{logo_url}", colors: {{primary, secondary, accent, background, text}} (hex), fonts: {{heading: "Inter", body: "Inter"}}}}
+business: {{name, tagline (5-8 ord), email, phone, address, org_number: null, social_links: {{}}}}
+section_order: [valda sektioner i visningsordning]
+section_settings: {{sektionsnamn: {{animation: "fade-up"|"fade-in"|"slide-left"|"slide-right"|"scale"|"none"}}}}
+
+SEKTIONER (varje sektion har title + subtitle om ej annat anges):
+- hero: {{headline (max 8 ord), subtitle (1-2 meningar), cta: {{label, href}}, background_image}}
+- about: {{title, text (80-120 ord), image, highlights: [{{label, value}}]}}
+- features: {{items: [{{title, description (max 2 meningar)}}]}}
+- stats: {{items: [{{value: "500+", label}}]}}
+- services: {{items: [{{title, description (max 2 meningar)}}]}}
+- process: {{steps: [{{title, description, step_number}}]}}
+- gallery: {{images: [{{url (från bildlistan!), alt, caption}}]}}
+- team: {{members: [{{name, role, image, bio (1 mening)}}]}}
+- testimonials: {{items: [{{text (2-3 meningar), author, role}}]}}
+- faq: {{items: [{{question, answer (1-2 meningar)}}]}}
+- cta: {{title, text (1 mening), button: {{label, href}}}}
+- contact: {{title, text (1 mening)}}
+- pricing: {{tiers: [{{name, price, description, features[], highlighted: bool, cta: {{label, href}}}}]}}
+- video: {{title, video_url (YouTube/Vimeo)}}
+- logo_cloud: {{logos: [{{name, image_url}}]}}
+- custom_content: {{blocks: [{{type: "text"|"image"|"button"|"heading", content, url, alt, label, href}}]}}
+- banner: {{text, button: {{label, href}}}}
+- ranking: {{items: [{{rank, title, description, image, link: {{label, href}}}}]}}
+
+PAGES (2-4 undersidor, startsidan = snippets, undersidor = fullständigt):
+pages: [{{slug, title, meta: {{title, description}}, sections: [{{type, data}}], parent_slug: null, show_in_nav: bool, nav_order: int}}]
+
+seo: {{structured_data: {{}}, robots: "index, follow"}}
+install_apps: [] (lägg till "blog"/"chat" om relevant)"""
 
 
 def _sanitize_for_prompt(text: str, max_length: int = 500) -> str:

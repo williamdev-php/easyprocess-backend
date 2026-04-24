@@ -120,5 +120,161 @@
     "warning": "This action cannot be undone. The website will be hidden from all visitors and all connected domains will be removed. Click the button below to confirm the deletion. The link is valid for 24\u00a0hours.",
     "cta": "Confirm deletion",
     "ignore": "If you didn\u2019t request this deletion, you can safely ignore this message."
+  },
+
+  "booking_common": {
+    "customer": "Customer",
+    "phone": "Phone",
+    "service": "Service",
+    "date": "Date",
+    "amount": "Amount",
+    "payment_method": "Payment method",
+    "payment_methods": {
+      "on_site": "Pay on site",
+      "card": "Card payment",
+      "swish": "Swish",
+      "klarna": "Klarna",
+      "stripe": "Card payment"
+    }
+  },
+
+  "booking_owner": {
+    "subject": "New booking from {customer_name} \u2014 {site_name}",
+    "heading": "New booking received",
+    "greeting": "Hi {name},",
+    "body": "A new booking has been submitted via {site_name}.",
+    "cta": "Manage booking",
+    "manage_note": "Log in to your dashboard to confirm or manage the booking."
+  },
+
+  "booking_customer_confirm": {
+    "subject": "Booking confirmation \u2014 {site_name}",
+    "heading": "Thank you for your booking!",
+    "greeting": "Hi {name},",
+    "body": "We have received your booking at {site_name}. You will receive a confirmation once the booking has been approved.",
+    "info": "You will be notified by email when your booking has been confirmed.",
+    "footer": "This email was sent on behalf of {site_name} via Qvicko."
+  },
+
+  "booking_confirmed": {
+    "subject": "Your booking is confirmed \u2014 {site_name}",
+    "heading": "Booking confirmed!",
+    "greeting": "Hi {name},",
+    "body": "Your booking at {site_name} has been confirmed.",
+    "info": "Please arrive on time. If you have any questions or need to make changes, contact us directly.",
+    "footer": "This email was sent on behalf of {site_name} via Qvicko."
+  },
+
+  "booking_cancelled": {
+    "subject": "Your booking has been cancelled \u2014 {site_name}",
+    "heading": "Booking cancelled",
+    "greeting": "Hi {name},",
+    "body": "Your booking at {site_name} has unfortunately been cancelled.",
+    "contact_note": "Contact {site_name} directly if you have questions or would like to book a new time."
+  },
+
+  "booking_completed": {
+    "subject": "Booking completed \u2014 {site_name}",
+    "heading": "Thank you for your visit!",
+    "greeting": "Hi {name},",
+    "body": "Your booking at {site_name} has been marked as completed.",
+    "thanks": "Thank you for choosing {site_name}. We hope you were satisfied!"
+  },
+
+  "booking_payment_received": {
+    "subject": "Payment received \u2014 {site_name}",
+    "heading": "Payment confirmed",
+    "greeting": "Hi {name},",
+    "body": "We have received your payment for the booking at {site_name}.",
+    "info": "The payment has been registered and confirmed. No further action is needed.",
+    "footer": "This email was sent on behalf of {site_name} via Qvicko."
+  },
+
+  "booking_payment_failed": {
+    "subject": "Payment failed \u2014 {site_name}",
+    "heading": "Payment could not be processed",
+    "greeting": "Hi {name},",
+    "body": "The payment for your booking at {site_name} could not be processed.",
+    "warning": "Please check that your card details are correct and that you have sufficient funds. Then try again.",
+    "contact_note": "Contact {site_name} if the problem persists."
+  },
+
+  "payout_initiated": {
+    "subject": "Payout initiated \u2014 {amount}",
+    "heading": "Payout on its way",
+    "greeting": "Hi {name},",
+    "body": "A payout of {amount} from {site_name} has been initiated to your bank account.",
+    "arrival_info": "Estimated arrival: {estimated_arrival}. Please note it may take 1\u20132 business days.",
+    "cta": "View payment overview",
+    "note": "Payouts are processed automatically via Stripe Connect based on your payout schedule."
+  },
+
+  "payout_completed": {
+    "subject": "Payout completed \u2014 {amount}",
+    "heading": "Payout completed!",
+    "greeting": "Hi {name},",
+    "body": "The payout of {amount} from {site_name} has reached your bank account.",
+    "info": "The amount should now be visible on your bank statement. If you don\u2019t see it within 24 hours, contact your bank.",
+    "cta": "View payment overview"
+  },
+
+  "payout_failed": {
+    "subject": "Payout failed \u2014 {amount}",
+    "heading": "Payout failed",
+    "greeting": "Hi {name},",
+    "body": "The payout of {amount} from {site_name} could not be completed.",
+    "warning": "Please verify that your bank details in Stripe are correct. Stripe will automatically retry.",
+    "reason_label": "Reason:",
+    "cta": "Check settings"
+  },
+
+  "chargeback_received": {
+    "subject": "Dispute received \u2014 {amount}",
+    "heading": "A dispute has been filed",
+    "greeting": "Hi {name},",
+    "body": "A customer has filed a dispute (chargeback) regarding a payment from {site_name}.",
+    "warning": "A dispute of {amount} has been opened by customer {customer_name}.",
+    "reason_label": "Reason:",
+    "respond_by_label": "Respond by:",
+    "action_info": "Disputes must be responded to before the deadline. Gather evidence such as booking confirmation, communication with the customer, and proof of delivery. If the dispute is lost, the amount will be deducted from your balance.",
+    "cta": "Manage dispute"
+  },
+
+  "negative_balance_warning": {
+    "subject": "Warning: Negative balance on your account",
+    "heading": "Negative balance",
+    "greeting": "Hi {name},",
+    "body": "The account connected to {site_name} has a negative balance of {balance}. This may be due to refunds or disputes.",
+    "warning": "The negative balance must be covered. Incoming earnings will be used to cover the debt. If not covered, Stripe may debit your bank account.",
+    "info": "To resolve this, you can wait for incoming payments which will automatically offset the debt, or contact us for assistance.",
+    "cta": "View your balance"
+  },
+
+  "negative_balance_overdue": {
+    "subject": "Important: Outstanding balance {balance}",
+    "heading": "Outstanding balance requires action",
+    "greeting": "Hi {name},",
+    "body": "The account connected to {site_name} has had a negative balance of {balance} for {days_negative}\u00a0days.",
+    "warning": "Please settle the outstanding amount immediately. If the balance is not resolved, Stripe may take action such as debiting your bank account or restricting your account.",
+    "action_info": "Contact us immediately if you cannot settle the amount. We\u2019ll help you find a solution.",
+    "cta": "Settle balance"
+  },
+
+  "contact_owner": {
+    "subject": "New message from {visitor_name} \u2014 {site_name}",
+    "heading": "New contact form submission",
+    "greeting": "Hi {name},",
+    "body": "Someone has sent a message through the contact form on {site_name}.",
+    "from_label": "From",
+    "reply_note": "Reply directly to {email} to continue the conversation."
+  },
+
+  "contact_visitor": {
+    "subject": "We\u2019ve received your message \u2014 {site_name}",
+    "heading": "Thank you for your message!",
+    "greeting": "Hi {name},",
+    "body": "Thank you for contacting {site_name}. We have received your message and will get back to you as soon as possible.",
+    "info": "We typically respond within 24 hours on business days.",
+    "footer": "This email was sent on behalf of {site_name} via Qvicko."
   }
 }

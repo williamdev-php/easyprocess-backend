@@ -8,8 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import cache
+from app.config import settings
 from app.database import get_db
-from app.apps.models import App, AppInstallation, AppReview, BlogCategory, BlogPost, BlogPostStatus, ChatConversation, ChatMessage
+from app.apps.models import App, AppInstallation, AppReview, BlogCategory, BlogPost, BlogPostStatus, Booking, BookingFormField, BookingPaymentMethods, BookingPaymentStatus, BookingService, BookingStatus, ChatConversation, ChatMessage
 from app.auth.models import User
 
 router = APIRouter(prefix="/api", tags=["apps"])
@@ -583,3 +584,325 @@ async def lookup_chat_conversations(
         }
         for c in convs
     ]
+
+
+# ---------------------------------------------------------------------------
+# Public: Bookings (viewer endpoints)
+# ---------------------------------------------------------------------------
+
+BOOKINGS_CACHE_TTL = 300  # 5 minutes
+
+
+async def _verify_bookings_installed(site_id: str, db: AsyncSession) -> None:
+    """Raise 404 if bookings app is not installed on the site."""
+    result = await db.execute(
+        select(App.slug)
+        .join(AppInstallation, AppInstallation.app_id == App.id)
+        .where(
+            App.slug == "bookings",
+            AppInstallation.site_id == site_id,
+            AppInstallation.is_active == True,  # noqa: E712
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Bookings is not available on this site")
+
+
+@router.get("/sites/{site_id}/bookings/services")
+async def list_booking_services(
+    site_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """List active booking services for a site (public)."""
+    cache_key = f"bookings:services:{site_id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    await _verify_bookings_installed(site_id, db)
+
+    result = await db.execute(
+        select(BookingService)
+        .where(
+            BookingService.site_id == site_id,
+            BookingService.is_active == True,  # noqa: E712
+        )
+        .order_by(BookingService.sort_order, BookingService.name)
+    )
+    services = result.scalars().all()
+
+    data = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "description": s.description,
+            "duration_minutes": s.duration_minutes,
+            "price": float(s.price) if s.price else 0,
+            "currency": s.currency,
+        }
+        for s in services
+    ]
+    await cache.set(cache_key, data, ttl=BOOKINGS_CACHE_TTL)
+    return data
+
+
+@router.get("/sites/{site_id}/bookings/form-fields")
+async def list_booking_form_fields(
+    site_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """List active booking form fields for a site (public)."""
+    cache_key = f"bookings:form_fields:{site_id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    await _verify_bookings_installed(site_id, db)
+
+    result = await db.execute(
+        select(BookingFormField)
+        .where(
+            BookingFormField.site_id == site_id,
+            BookingFormField.is_active == True,  # noqa: E712
+        )
+        .order_by(BookingFormField.sort_order, BookingFormField.label)
+    )
+    fields = result.scalars().all()
+
+    data = [
+        {
+            "id": f.id,
+            "label": f.label,
+            "field_type": f.field_type,
+            "placeholder": f.placeholder,
+            "is_required": f.is_required,
+            "options": f.options,
+        }
+        for f in fields
+    ]
+    await cache.set(cache_key, data, ttl=BOOKINGS_CACHE_TTL)
+    return data
+
+
+@router.get("/sites/{site_id}/bookings/payment-methods")
+async def get_booking_payment_methods(
+    site_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get enabled payment methods for a site (public)."""
+    cache_key = f"bookings:payment_methods:{site_id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    await _verify_bookings_installed(site_id, db)
+
+    result = await db.execute(
+        select(BookingPaymentMethods).where(BookingPaymentMethods.site_id == site_id)
+    )
+    pm = result.scalar_one_or_none()
+
+    data = {
+        "stripe_connect_enabled": pm.stripe_connect_enabled if pm else False,
+        "on_site_enabled": pm.on_site_enabled if pm else True,
+        "klarna_enabled": pm.klarna_enabled if pm else False,
+        "swish_enabled": pm.swish_enabled if pm else False,
+    }
+    await cache.set(cache_key, data, ttl=BOOKINGS_CACHE_TTL)
+    return data
+
+
+@router.post("/sites/{site_id}/bookings")
+async def create_booking(
+    site_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Submit a new booking (public, no auth required)."""
+    await _verify_bookings_installed(site_id, db)
+
+    import uuid as _uuid
+    from datetime import datetime, timezone as tz
+
+    # Validate required fields
+    customer_name = (body.get("customer_name") or "").strip()
+    customer_email = (body.get("customer_email") or "").strip().lower()
+    customer_phone = (body.get("customer_phone") or "").strip() or None
+    service_id = body.get("service_id")
+    form_data = body.get("form_data") or {}
+    payment_method = (body.get("payment_method") or "").strip() or None
+    booking_date_str = body.get("booking_date")
+    notes = (body.get("notes") or "").strip() or None
+
+    if not customer_name:
+        raise HTTPException(status_code=400, detail="Customer name is required")
+    if not customer_email or "@" not in customer_email or len(customer_email) > 320:
+        raise HTTPException(status_code=400, detail="A valid email is required")
+
+    # Validate form_data against configured required fields
+    result = await db.execute(
+        select(BookingFormField).where(
+            BookingFormField.site_id == site_id,
+            BookingFormField.is_active == True,  # noqa: E712
+            BookingFormField.is_required == True,  # noqa: E712
+        )
+    )
+    required_fields = result.scalars().all()
+    for field in required_fields:
+        field_value = form_data.get(field.label, "")
+        if not field_value or (isinstance(field_value, str) and not field_value.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field '{field.label}' is required",
+            )
+
+    # Look up service
+    service_name = None
+    amount = 0.0
+    currency = "SEK"
+    if service_id:
+        svc_result = await db.execute(
+            select(BookingService).where(
+                BookingService.id == service_id,
+                BookingService.site_id == site_id,
+                BookingService.is_active == True,  # noqa: E712
+            )
+        )
+        service = svc_result.scalar_one_or_none()
+        if service is None:
+            raise HTTPException(status_code=400, detail="Service not found")
+        service_name = service.name
+        amount = float(service.price) if service.price else 0
+        currency = service.currency
+
+    # Parse booking_date
+    booking_date = None
+    if booking_date_str:
+        try:
+            booking_date = datetime.fromisoformat(booking_date_str)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid booking_date format")
+
+    now = datetime.now(tz.utc)
+    booking = Booking(
+        id=str(_uuid.uuid4()),
+        site_id=site_id,
+        service_id=service_id,
+        service_name=service_name,
+        customer_name=customer_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        form_data=form_data if form_data else None,
+        status=BookingStatus.PENDING,
+        payment_method=payment_method,
+        payment_status=BookingPaymentStatus.UNPAID,
+        amount=amount,
+        currency=currency,
+        notes=notes,
+        booking_date=booking_date,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(booking)
+
+    stripe_client_secret = None
+
+    # If payment_method is "stripe", create a PaymentIntent
+    if payment_method == "stripe" and amount > 0:
+        # TODO: Integrate with app.payments.service when available
+        # For now, leave a placeholder for Stripe PaymentIntent creation
+        pass
+
+    await db.commit()
+
+    # Send notification email to site owner
+    try:
+        from app.email.service import send_transactional_email
+        from app.email.booking_templates import (
+            build_booking_owner_notification_email,
+            build_booking_customer_confirmation_email,
+        )
+        from app.sites.models import GeneratedSite
+
+        site_result = await db.execute(
+            select(GeneratedSite).where(GeneratedSite.id == site_id)
+        )
+        site = site_result.scalar_one_or_none()
+        site_name = "din webbplats"
+        if site and site.site_data:
+            site_name = site.site_data.get("business", {}).get("name") or site.site_data.get("meta", {}).get("title") or site_name
+
+        booking_date_display = booking_date.strftime("%Y-%m-%d %H:%M") if booking_date else "Ej angivet"
+        dashboard_url = f"{settings.FRONTEND_URL}/dashboard/sites/{site_id}/apps/bookings/bookings"
+
+        if site and site.claimed_by:
+            owner_result = await db.execute(
+                select(User).where(User.id == site.claimed_by)
+            )
+            owner = owner_result.scalar_one_or_none()
+            if owner and owner.email:
+                owner_subj, owner_html, owner_text = build_booking_owner_notification_email(
+                    owner_name=owner.full_name or owner.email,
+                    site_name=site_name,
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    customer_phone=customer_phone,
+                    service_name=service_name,
+                    booking_date=booking_date_display,
+                    amount=amount,
+                    currency=currency,
+                    payment_method=payment_method,
+                    dashboard_url=dashboard_url,
+                    form_data=form_data if form_data else None,
+                )
+                await send_transactional_email(
+                    to=owner.email,
+                    subject=owner_subj,
+                    html=owner_html,
+                    text=owner_text,
+                    from_name="Bookings by Qvicko",
+                )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Failed to send booking owner notification email")
+
+    # Send confirmation email to customer
+    try:
+        from app.email.service import send_transactional_email
+        from app.email.booking_templates import build_booking_customer_confirmation_email
+
+        if not site_name or site_name == "din webbplats":
+            site_result2 = await db.execute(
+                select(GeneratedSite).where(GeneratedSite.id == site_id)
+            )
+            site2 = site_result2.scalar_one_or_none()
+            if site2 and site2.site_data:
+                site_name = site2.site_data.get("business", {}).get("name") or site2.site_data.get("meta", {}).get("title") or site_name
+
+        booking_date_display = booking_date.strftime("%Y-%m-%d %H:%M") if booking_date else "Ej angivet"
+
+        cust_subj, cust_html, cust_text = build_booking_customer_confirmation_email(
+            customer_name=customer_name,
+            site_name=site_name,
+            service_name=service_name,
+            booking_date=booking_date_display,
+            amount=amount,
+            currency=currency,
+        )
+        await send_transactional_email(
+            to=customer_email,
+            subject=cust_subj,
+            html=cust_html,
+            text=cust_text,
+            from_name="Bookings by Qvicko",
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Failed to send booking customer confirmation email")
+
+    response = {
+        "booking_id": booking.id,
+    }
+    if stripe_client_secret:
+        response["stripe_client_secret"] = stripe_client_secret
+    return response

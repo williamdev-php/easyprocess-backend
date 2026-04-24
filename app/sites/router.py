@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.cache import cache
+from app.config import settings
 from app.database import get_db
 from app.email.service import process_resend_webhook
 from app.rate_limit import limiter
@@ -988,23 +989,78 @@ async def submit_contact(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Receive a contact form submission from a site visitor."""
-    # Validate site exists
+    # Validate site exists and fetch site data for emails
     result = await db.execute(
-        select(GeneratedSite.id).where(GeneratedSite.id == site_id)
+        select(GeneratedSite).where(GeneratedSite.id == site_id)
     )
-    if not result.scalar_one_or_none():
+    site = result.scalar_one_or_none()
+    if not site:
         raise HTTPException(status_code=404, detail="Site not found")
 
     import html as _html
 
+    visitor_name = payload.name.strip()
+    visitor_email = payload.email.strip()
+    message_text = payload.message.strip()
+
     contact_msg = ContactMessage(
         site_id=site_id,
-        name=_html.escape(payload.name.strip()),
-        email=payload.email.strip(),
-        message=_html.escape(payload.message.strip()),
+        name=_html.escape(visitor_name),
+        email=visitor_email,
+        message=_html.escape(message_text),
     )
     db.add(contact_msg)
     await db.commit()
+
+    # Send email notifications
+    try:
+        from app.email.service import send_transactional_email
+        from app.email.contact_templates import (
+            build_contact_form_owner_email,
+            build_contact_form_visitor_email,
+        )
+
+        site_name = "Hemsida"
+        if site.site_data:
+            site_name = site.site_data.get("business", {}).get("name") or site.site_data.get("meta", {}).get("title") or site_name
+
+        # Notify site owner
+        if site.claimed_by:
+            owner_result = await db.execute(
+                select(User).where(User.id == site.claimed_by)
+            )
+            owner = owner_result.scalar_one_or_none()
+            if owner and owner.email:
+                owner_subj, owner_html, owner_text = build_contact_form_owner_email(
+                    owner_name=owner.full_name or owner.email,
+                    site_name=site_name,
+                    visitor_name=visitor_name,
+                    visitor_email=visitor_email,
+                    message=message_text,
+                    dashboard_url=f"{settings.FRONTEND_URL}/dashboard",
+                )
+                await send_transactional_email(
+                    to=owner.email,
+                    subject=owner_subj,
+                    html=owner_html,
+                    text=owner_text,
+                    from_name=site_name,
+                )
+
+        # Send confirmation to visitor
+        visitor_subj, visitor_html, visitor_text = build_contact_form_visitor_email(
+            visitor_name=visitor_name,
+            site_name=site_name,
+        )
+        await send_transactional_email(
+            to=visitor_email,
+            subject=visitor_subj,
+            html=visitor_html,
+            text=visitor_text,
+            from_name=site_name,
+        )
+    except Exception:
+        logger.exception("Failed to send contact form emails")
 
     return {"ok": True}
 

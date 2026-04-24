@@ -554,6 +554,23 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 
+async def fetch_google_userinfo(access_token: str) -> dict:
+    """Fetch Google user info using an access token (used by iOS flow).
+
+    Returns dict with keys: id, email, name, picture.
+    Raises ValueError on failure.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if resp.status_code != 200:
+            logger.warning("Google userinfo fetch failed: %s", resp.text)
+            raise ValueError("Failed to fetch Google user info")
+        return resp.json()
+
+
 async def exchange_google_code(code: str, redirect_uri: str) -> dict:
     """Exchange a Google authorization code for user info.
 
@@ -669,6 +686,168 @@ async def get_or_create_google_user(
     # Set avatar if user doesn't have one
     if not user.avatar_url and google_picture:
         user.avatar_url = google_picture
+
+    await db.flush()
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Apple Sign-In
+# ---------------------------------------------------------------------------
+
+APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
+APPLE_TOKEN_URL = "https://appleid.apple.com/auth/token"
+APPLE_ISSUER = "https://appleid.apple.com"
+
+# Cache Apple's public keys for 1 hour
+_apple_keys_cache: dict | None = None
+_apple_keys_fetched_at: datetime | None = None
+_APPLE_KEYS_TTL = timedelta(hours=1)
+
+
+async def _get_apple_public_keys() -> dict:
+    """Fetch and cache Apple's public keys (JWKS)."""
+    global _apple_keys_cache, _apple_keys_fetched_at
+
+    now = datetime.now(timezone.utc)
+    if (
+        _apple_keys_cache is not None
+        and _apple_keys_fetched_at is not None
+        and now - _apple_keys_fetched_at < _APPLE_KEYS_TTL
+    ):
+        return _apple_keys_cache
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(APPLE_KEYS_URL)
+        if resp.status_code != 200:
+            raise ValueError("Failed to fetch Apple public keys")
+        _apple_keys_cache = resp.json()
+        _apple_keys_fetched_at = now
+        return _apple_keys_cache
+
+
+async def verify_apple_identity_token(identity_token: str) -> dict:
+    """Verify an Apple identity token (JWT) and return the claims.
+
+    Returns dict with keys: sub, email, email_verified, etc.
+    Raises ValueError on invalid token.
+    """
+    # Decode header to find the key ID
+    try:
+        unverified_header = jwt.get_unverified_header(identity_token)
+    except JWTError:
+        raise ValueError("Invalid Apple identity token")
+
+    kid = unverified_header.get("kid")
+    if not kid:
+        raise ValueError("Apple token missing key ID")
+
+    # Get Apple's public keys
+    apple_keys = await _get_apple_public_keys()
+    matching_key = None
+    for key in apple_keys.get("keys", []):
+        if key.get("kid") == kid:
+            matching_key = key
+            break
+
+    if not matching_key:
+        # Keys might have rotated — force refresh and retry
+        global _apple_keys_cache
+        _apple_keys_cache = None
+        apple_keys = await _get_apple_public_keys()
+        for key in apple_keys.get("keys", []):
+            if key.get("kid") == kid:
+                matching_key = key
+                break
+
+    if not matching_key:
+        raise ValueError("Apple public key not found for token")
+
+    # Verify and decode the token
+    try:
+        claims = jwt.decode(
+            identity_token,
+            matching_key,
+            algorithms=["RS256"],
+            audience=settings.APPLE_CLIENT_ID,
+            issuer=APPLE_ISSUER,
+        )
+    except JWTError as e:
+        logger.warning("Apple token verification failed: %s", e)
+        raise ValueError("Apple identity token verification failed")
+
+    return claims
+
+
+async def get_or_create_apple_user(
+    db: AsyncSession,
+    apple_claims: dict,
+    full_name: str | None = None,
+    email_hint: str | None = None,
+    locale: str = "sv",
+) -> User:
+    """Find existing user by Apple social account or email, or create a new one.
+
+    Apple only sends the user's name on the FIRST authorization.
+    The email might also only be sent on the first authorization.
+    """
+    apple_sub = apple_claims["sub"]
+    # Apple may return a private relay email or the real email
+    apple_email = (apple_claims.get("email") or email_hint or "").lower()
+
+    # 1. Check if there's already a SocialAccount for this Apple ID
+    result = await db.execute(
+        select(SocialAccount)
+        .where(
+            and_(
+                SocialAccount.provider == SocialProvider.APPLE,
+                SocialAccount.provider_user_id == apple_sub,
+            )
+        )
+        .options(selectinload(SocialAccount.user))
+    )
+    social = result.scalar_one_or_none()
+
+    if social and social.user:
+        # Update provider data on each login
+        social.provider_data = apple_claims
+        if apple_email:
+            social.provider_email = apple_email
+        await db.flush()
+        return social.user
+
+    # 2. Check if a user with this email already exists
+    user = None
+    if apple_email:
+        user = await get_user_by_email(db, apple_email)
+
+    if not user:
+        # 3. Create new user (no password — social-only account)
+        display_name = full_name or apple_email.split("@")[0] if apple_email else "Apple User"
+        user = User(
+            email=apple_email,
+            password_hash=None,
+            full_name=display_name,
+            locale=locale,
+            is_verified=True,  # Apple has verified the email
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(user)
+
+    # 4. Link Apple account to user
+    social_account = SocialAccount(
+        user_id=user.id,
+        provider=SocialProvider.APPLE,
+        provider_user_id=apple_sub,
+        provider_email=apple_email,
+        provider_data=apple_claims,
+    )
+    db.add(social_account)
+
+    # Mark email as verified since Apple verified it
+    if not user.is_verified and apple_claims.get("email_verified") in (True, "true"):
+        user.is_verified = True
 
     await db.flush()
     return user

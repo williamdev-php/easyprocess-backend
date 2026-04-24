@@ -179,92 +179,103 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 lead.website_url, emails, phones, len(data["images"]),
             )
 
-            # --- Step 2b2: Multi-page crawl ---
-            crawl_report_data = None
-            try:
-                if homepage_html:
-                    homepage_soup = BeautifulSoup(homepage_html, "lxml")
-                    nav_pages = discover_nav_links(homepage_soup, final_url)
-                    if nav_pages:
-                        logger.info(
-                            "Discovered %d subpages for %s, crawling...",
-                            len(nav_pages), lead.website_url,
-                        )
-                        await crawl_subpages(nav_pages, final_url)
-                        crawl_report = build_crawl_report(final_url, homepage_soup, nav_pages)
-                        crawl_report_data = crawl_report.to_dict()
-
-                        # Merge subpage images into main image list (with context)
-                        subpage_images = crawl_report.all_images
-                        if subpage_images:
-                            existing_urls = {img.get("url") for img in data["images"]}
-                            new_images = [
-                                img for img in subpage_images
-                                if img.get("url") and img["url"] not in existing_urls
-                            ]
-                            data["images"].extend(new_images[:20])  # add up to 20 extra
+            # --- Step 2b2 + 2c: Crawl & Screenshot in parallel ---
+            async def _do_crawl() -> dict | None:
+                """Multi-page crawl — runs concurrently with screenshots."""
+                try:
+                    if homepage_html:
+                        homepage_soup = BeautifulSoup(homepage_html, "lxml")
+                        nav_pages = discover_nav_links(homepage_soup, final_url)
+                        if nav_pages:
                             logger.info(
-                                "Added %d subpage images (total: %d)",
-                                len(new_images[:20]), len(data["images"]),
+                                "Discovered %d subpages for %s, crawling...",
+                                len(nav_pages), lead.website_url,
                             )
+                            await crawl_subpages(nav_pages, final_url)
+                            crawl_report = build_crawl_report(final_url, homepage_soup, nav_pages)
+                            cr_data = crawl_report.to_dict()
 
-                        # Enrich texts with subpage content
-                        _merge_subpage_content(data, nav_pages)
+                            # Merge subpage images into main image list (with context)
+                            subpage_images = crawl_report.all_images
+                            if subpage_images:
+                                existing_urls = {img.get("url") for img in data["images"]}
+                                new_images = [
+                                    img for img in subpage_images
+                                    if img.get("url") and img["url"] not in existing_urls
+                                ]
+                                data["images"].extend(new_images[:20])
+                                logger.info(
+                                    "Added %d subpage images (total: %d)",
+                                    len(new_images[:20]), len(data["images"]),
+                                )
 
-                        data["crawl_report"] = crawl_report_data
-                        logger.info(
-                            "Crawl complete for %s: %d pages, notes=%d",
-                            lead.website_url,
-                            crawl_report.pages_crawled,
-                            len(crawl_report.generation_notes),
-                        )
-                    else:
-                        logger.info("No subpages discovered for %s", lead.website_url)
-                elif cached_data and cached_data.get("crawl_report"):
-                    crawl_report_data = cached_data["crawl_report"]
-                    data["crawl_report"] = crawl_report_data
-            except Exception as crawl_err:
-                logger.warning(
-                    "Multi-page crawl failed for %s, continuing without: %s",
-                    lead.website_url, crawl_err,
-                )
+                            _merge_subpage_content(data, nav_pages)
 
-            # Persist crawl report to scraped data
-            if crawl_report_data and lead.scraped_data:
-                lead.scraped_data.crawl_report = crawl_report_data
-                await db.commit()
-
-            # --- Step 2c: Screenshot + Vision Analysis ---
-            screenshot_data = None
-            try:
-                logger.info("Capturing screenshots for %s", lead.website_url)
-                screenshot_data = await capture_screenshot_bytes(lead.website_url)
-                if screenshot_data:
-                    logger.info("Analyzing %d screenshots with vision model", len(screenshot_data))
-                    visual_analysis = await analyze_screenshots(screenshot_data)
-                    if visual_analysis:
-                        data["visual_analysis"] = visual_analysis
-
-                        # Override CSS colors with vision-detected colors (much more accurate)
-                        if isinstance(visual_analysis.get("colors"), dict):
-                            vision_colors = visual_analysis["colors"]
-                            css_colors = data.get("colors", {})
-                            for key in ["primary", "secondary", "accent", "background", "text"]:
-                                if vision_colors.get(key) and vision_colors[key].startswith("#"):
-                                    css_colors[key] = vision_colors[key]
-                            data["colors"] = css_colors
                             logger.info(
-                                "Overrode CSS colors with vision colors: %s",
-                                {k: v for k, v in css_colors.items()},
+                                "Crawl complete for %s: %d pages, notes=%d",
+                                lead.website_url,
+                                crawl_report.pages_crawled,
+                                len(crawl_report.generation_notes),
                             )
+                            return cr_data
+                        else:
+                            logger.info("No subpages discovered for %s", lead.website_url)
+                    elif cached_data and cached_data.get("crawl_report"):
+                        return cached_data["crawl_report"]
+                except Exception as crawl_err:
+                    logger.warning(
+                        "Multi-page crawl failed for %s, continuing without: %s",
+                        lead.website_url, crawl_err,
+                    )
+                return None
 
-                        logger.info("Vision analysis complete for %s", lead.website_url)
+            async def _do_screenshots() -> tuple[list[dict] | None, dict | None]:
+                """Capture screenshots + vision analysis — runs concurrently with crawl."""
+                s_data = None
+                v_analysis = None
+                try:
+                    logger.info("Capturing screenshots for %s", lead.website_url)
+                    s_data = await capture_screenshot_bytes(lead.website_url)
+                    if s_data:
+                        logger.info("Analyzing %d screenshots with vision model", len(s_data))
+                        v_analysis = await analyze_screenshots(s_data)
+                        if v_analysis:
+                            logger.info("Vision analysis complete for %s", lead.website_url)
+                        else:
+                            logger.info("Vision analysis returned no results for %s", lead.website_url)
                     else:
-                        logger.info("Vision analysis returned no results for %s", lead.website_url)
-                else:
-                    logger.info("No screenshots captured for %s", lead.website_url)
-            except Exception as vis_err:
-                logger.warning("Vision analysis failed for %s, continuing without: %s", lead.website_url, vis_err)
+                        logger.info("No screenshots captured for %s", lead.website_url)
+                except Exception as vis_err:
+                    logger.warning("Vision analysis failed for %s, continuing without: %s", lead.website_url, vis_err)
+                return s_data, v_analysis
+
+            # Run crawl and screenshot/vision in parallel
+            crawl_report_data, (screenshot_data, visual_analysis) = await asyncio.gather(
+                _do_crawl(),
+                _do_screenshots(),
+            )
+
+            # Apply crawl results
+            if crawl_report_data:
+                data["crawl_report"] = crawl_report_data
+                if lead.scraped_data:
+                    lead.scraped_data.crawl_report = crawl_report_data
+                    await db.commit()
+
+            # Apply vision results
+            if visual_analysis:
+                data["visual_analysis"] = visual_analysis
+                if isinstance(visual_analysis.get("colors"), dict):
+                    vision_colors = visual_analysis["colors"]
+                    css_colors = data.get("colors", {})
+                    for key in ["primary", "secondary", "accent", "background", "text"]:
+                        if vision_colors.get(key) and vision_colors[key].startswith("#"):
+                            css_colors[key] = vision_colors[key]
+                    data["colors"] = css_colors
+                    logger.info(
+                        "Overrode CSS colors with vision colors: %s",
+                        {k: v for k, v in css_colors.items()},
+                    )
 
             # --- Step 3: Generate site ---
             lead.status = LeadStatus.GENERATING
