@@ -18,6 +18,8 @@ import httpx
 
 from app.ai.prompts import build_prompt
 from app.config import settings
+from app.database import get_db_session
+from app.platform_settings.service import get_setting
 from app.sites.site_schema import CURRENT_VIEWER_VERSION, SiteSchema
 
 logger = logging.getLogger(__name__)
@@ -45,15 +47,20 @@ class GenerationResult:
         self.install_apps = install_apps or []
 
 
-# Anthropic pricing per 1M tokens (USD) — https://docs.anthropic.com/en/docs/about-claude/models
+# Pricing per 1M tokens (USD)
 _INPUT_COST_PER_1M: dict[str, float] = {
     "claude-haiku-4-5-20251001": 1.00,
     "claude-sonnet-4-6": 3.00,
+    "gemini-2.5-flash": 0.15,
 }
 _OUTPUT_COST_PER_1M: dict[str, float] = {
     "claude-haiku-4-5-20251001": 5.00,
     "claude-sonnet-4-6": 15.00,
+    "gemini-2.5-flash": 0.60,
 }
+
+# Models that use the Google Gemini API instead of Anthropic
+_GEMINI_MODELS = {"gemini-2.5-flash"}
 
 
 # Number of available style variants (0 through N-1). Increase this when
@@ -140,7 +147,16 @@ async def generate_site(
     color matching and design analysis.
     Retries once on invalid JSON.
     """
-    model = model_override or settings.AI_MODEL
+    # Resolve model: explicit override > platform setting > env default
+    if model_override:
+        model = model_override
+    else:
+        try:
+            async with get_db_session() as db:
+                model = await get_setting(db, "ai_model")
+        except Exception:
+            model = settings.AI_MODEL
+
     system_prompt, user_prompt = build_prompt(
         business_name=business_name,
         industry=industry,
@@ -164,10 +180,16 @@ async def generate_site(
         try:
             start = time.monotonic()
 
-            raw_json, input_tokens, output_tokens = await _call_anthropic(
-                system_prompt, user_prompt, model,
-                screenshot_bytes=screenshot_bytes,
-            )
+            if model in _GEMINI_MODELS:
+                raw_json, input_tokens, output_tokens = await _call_gemini(
+                    system_prompt, user_prompt, model,
+                    screenshot_bytes=screenshot_bytes,
+                )
+            else:
+                raw_json, input_tokens, output_tokens = await _call_anthropic(
+                    system_prompt, user_prompt, model,
+                    screenshot_bytes=screenshot_bytes,
+                )
 
             duration_ms = int((time.monotonic() - start) * 1000)
 
@@ -284,3 +306,68 @@ async def _call_anthropic(
             content = content.split("```")[1].split("```")[0].strip()
 
         return content, data["usage"]["input_tokens"], data["usage"]["output_tokens"]
+
+
+async def _call_gemini(
+    system: str,
+    user: str,
+    model: str,
+    screenshot_bytes: list[dict] | None = None,
+) -> tuple[str, int, int]:
+    """Call Google Gemini API. Returns (json_string, input_tokens, output_tokens)."""
+
+    # Build parts array
+    parts: list[dict] = []
+
+    if screenshot_bytes:
+        for shot in screenshot_bytes[:3]:
+            img_bytes = shot.get("bytes")
+            if not img_bytes or len(img_bytes) == 0:
+                continue
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            parts.append({
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": b64,
+                },
+            })
+
+    parts.append({"text": user})
+
+    api_key = settings.GOOGLE_AI_API_KEY
+    if not api_key:
+        raise RuntimeError("GOOGLE_AI_API_KEY is not configured")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "system_instruction": {"parts": [{"text": system}]},
+                "contents": [{"parts": parts}],
+                "generationConfig": {
+                    "temperature": 0.5,
+                    "maxOutputTokens": 16000,
+                    "responseMimeType": "application/json",
+                },
+            },
+        )
+        if resp.status_code != 200:
+            resp.raise_for_status()
+
+        data = resp.json()
+        content = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        # Extract JSON from potential markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        usage = data.get("usageMetadata", {})
+        input_tokens = usage.get("promptTokenCount", 0)
+        output_tokens = usage.get("candidatesTokenCount", 0)
+
+        return content, input_tokens, output_tokens

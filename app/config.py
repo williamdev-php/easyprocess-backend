@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     AI_MODEL: str = "claude-haiku-4-5-20251001"  # cheap default for lead generation
 
+    # Google AI (Gemini + Imagen/Nano Banana)
+    GOOGLE_AI_API_KEY: str = ""
+
     # Password Reset
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
 
