@@ -41,7 +41,7 @@ REGLER:
 3. Skriv KORTFATTAT och SLAGKRAFTIGT — varje mening ska ha ett syfte. Undvik upprepningar och utfyllnadstext. About-text: 80-120 ord. Beskrivningar: max 2 meningar.
 4. FÄRGER: Använd de EXAKTA färgerna från den visuella analysen. Om visuell analys saknas, använd CSS-färgerna. Förbättra bara om färgerna är genuint dåliga.
 5. Varje content-block (hero, about, services, etc.) är en separat nyckel. Sätt till null om sektionen inte är relevant.
-6. Inkludera INTE navigation, footer eller page-struktur — det genereras automatiskt.
+6. Inkludera INTE navigation eller footer — det genereras automatiskt.
 7. VIKTIGT — VÄLJ SEKTIONER INTELLIGENT baserat på företagets storlek, bransch och tillgänglig information:
    - En enkel affärsidé behöver FÄRRE sektioner (3-5). T.ex. hero + about + contact räcker för en frisör.
    - Ett större företag med mycket information kan ha fler sektioner (5-8).
@@ -81,6 +81,41 @@ NYA SEKTIONSTYPER (använd när det är relevant):
 - "custom_content": Fritext-sektion med blocks[]. Varje block har type ("text"/"image"/"button"/"heading"), content, url, alt, label, href.
 - "banner": Fullbredd-meddelande med text och valfri button.
 - "ranking": Topplista / bäst-i-test-sektion med rankade objekt. Perfekt för jämförelsesidor, topp-5/10-listor, produktrecensioner. Varje item har rank (nummer), title, description, image (URL eller null), link ({label, href} eller null för extern länk/knapp).
+
+AUTO-INSTALL APPAR:
+Om kunden uttryckligen nämner att de vill ha en blogg, nyheter eller artiklar, inkludera:
+  "install_apps": ["blog"]
+Om kunden nämner chatt, kundtjänst eller livechatt, inkludera:
+  "install_apps": ["chat"]
+Tillgängliga appar: "blog", "chat". Inkludera BARA om det finns tydlig anledning från kundens beskrivning.
+Om ingen app behövs, utelämna install_apps eller sätt till tom lista.
+
+FLERSIDIGT STÖD (pages):
+Startsidan byggs av de vanliga top-level sektionerna (hero, about, services, etc.).
+Utöver startsidan kan du skapa SEPARATA undersidor via "pages"-arrayen.
+
+REGLER FÖR PAGES:
+- Skapa 2-4 undersidor MAX. Inte fler.
+- Varje sida har: slug, title, meta (SEO), sections (lista av sektionstyper med data).
+- Sektionerna i pages använder SAMMA typer som startsidan: "hero", "about", "services", "features", "faq", "contact", "pricing", "gallery", "process", "testimonials", "cta", "custom_content", "stats", "team", "banner", "video".
+- Varje page-sektion har: type (sektionstyp) och data (matchande fält för den typen).
+- parent_slug: sätt till null för toppnivå-sidor. Använd parent_slug för child-sidor (t.ex. parent_slug="tjanster" för en undersida till /tjanster/).
+- show_in_nav: true om sidan ska visas i navigationen, false om den är en child-sida eller dold.
+- nav_order: ordning i navigationen (lägre = först).
+
+NÄR SKA DU SKAPA PAGES:
+- Enkel affärsidé (frisör, bilrekond): 2-3 sidor. T.ex. startsida + "Om oss" + "Boka tid".
+- Tjänsteföretag: 2-4 sidor. T.ex. startsida + "Tjänster" + "Om oss" + "Kontakt".
+- Om det finns mycket innehåll som inte passar på startsidan, bryt ut det till egna sidor.
+- Startsidans sektioner ska vara KORTA snippets/sammanfattningar. De fullständiga versionerna läggs på undersidor.
+- Sätt INTE samma fullständiga innehåll på både startsidan och en undersida.
+
+STRATEGI:
+1. Startsidan: hero + korta snippets (about-snippet, services-snippet, testimonials, CTA).
+2. Undersidor: fullständiga versioner av about, services, FAQ, kontakt, etc.
+3. Om startsidan har en about-snippet → skapa en /om-oss sida med utförligare about + features/stats.
+4. Om startsidan har services-snippet → skapa en /tjanster sida med alla tjänster i detalj.
+5. Kontaktsida är nästan alltid relevant som egen sida.
 
 TILLGÄNGLIGA STILVARIANTER:
 ─────────────────────────────
@@ -175,12 +210,13 @@ JSON-SCHEMA ATT FYLLA I
 VIKTIGT:
 - Svara med ENBART valid JSON
 - Använd de tillhandahållna bild-URL:erna. Hitta INTE PÅ nya.
-- Inkludera INTE "navigation", "footer" eller "pages"
+- Inkludera INTE "navigation" eller "footer" — det genereras automatiskt
 - Skriv KORTFATTAT — about max 120 ord, beskrivningar max 2 meningar
 - Inkludera "section_settings" med varierade animationer per sektion
 - Inkludera BARA sektioner som är relevanta — välj INTELLIGENT baserat på kontext
 - Sektioner du INTE inkluderar ska sättas till null eller utelämnas helt
 - Inkludera "ranking" om sidan handlar om jämförelser/toplistor/bäst-i-test
+- Inkludera "pages" med 2-4 undersidor. Startsidan = snippets, undersidor = fullständigt innehåll
 
 {{
   "meta": {{
@@ -303,10 +339,36 @@ VIKTIGT:
       {{ "rank": 1, "title": "Namn", "description": "Kort beskrivning", "image": null, "link": {{ "label": "Besök", "href": "https://..." }} }}
     ]
   }},
+  "pages": [
+    {{
+      "slug": "om-oss",
+      "title": "Om oss",
+      "meta": {{ "title": "Om oss | Företagsnamn", "description": "Läs mer om oss." }},
+      "sections": [
+        {{ "type": "about", "data": {{ "title": "Om oss", "text": "Fullständig om oss-text, 80-120 ord." }} }},
+        {{ "type": "stats", "data": {{ "title": "", "items": [{{ "value": "10+", "label": "År i branschen" }}] }} }}
+      ],
+      "parent_slug": null,
+      "show_in_nav": true,
+      "nav_order": 1
+    }},
+    {{
+      "slug": "kontakt",
+      "title": "Kontakta oss",
+      "meta": {{ "title": "Kontakt | Företagsnamn", "description": "Kontakta oss." }},
+      "sections": [
+        {{ "type": "contact", "data": {{ "title": "Kontakta oss", "text": "Vi svarar inom 24h." }} }}
+      ],
+      "parent_slug": null,
+      "show_in_nav": true,
+      "nav_order": 10
+    }}
+  ],
   "seo": {{
     "structured_data": {{}},
     "robots": "index, follow"
-  }}
+  }},
+  "install_apps": []
 }}"""
 
 

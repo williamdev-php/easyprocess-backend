@@ -573,6 +573,39 @@ class ExtraSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Multi-page support
+# ---------------------------------------------------------------------------
+
+class PageMeta(BaseModel):
+    """SEO metadata for an individual page."""
+    title: str = ""
+    description: str = ""
+    og_image: str | None = None
+
+
+class PageSection(BaseModel):
+    """A section instance within a page. References existing section types."""
+    type: str  # one of the known section keys: "hero", "about", "services", etc.
+    data: dict = {}  # matches the Pydantic model shape for that section type
+
+
+class PageSchema(BaseModel):
+    """A single page in a multi-page site.
+
+    Pages use the same section component library as the home page but have
+    their own slug, title, SEO metadata, and section list.  They can form
+    a parent/child hierarchy via ``parent_slug`` (one level deep).
+    """
+    slug: str  # URL slug, e.g. "about-us", "pricing"
+    title: str  # display title used in nav & page header
+    meta: PageMeta = PageMeta()
+    sections: list[PageSection] = []
+    parent_slug: str | None = None  # for child pages, e.g. "collections"
+    show_in_nav: bool = True
+    nav_order: int = 0
+
+
+# ---------------------------------------------------------------------------
 # Full site schema
 # ---------------------------------------------------------------------------
 
@@ -655,3 +688,7 @@ class SiteSchema(BaseModel):
     # Custom head scripts — user-added only, never AI-generated.
     # Not in _VALID_TOP_LEVEL_KEYS so AI generator strips it automatically.
     head_scripts: HeadScripts | None = None
+
+    # Multi-page support — each page has its own slug, sections, and meta.
+    # None/empty = single-page site (backward compatible).
+    pages: list[PageSchema] | None = None

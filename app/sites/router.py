@@ -190,6 +190,12 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
             slugs.append("gallery")
         if data.get("business", {}).get("email") or data.get("business", {}).get("phone") or data.get("contact"):
             slugs.append("contact")
+        # Multi-page support: add page slugs
+        for page in data.get("pages") or []:
+            ps = page.get("slug", "")
+            if ps:
+                parent = page.get("parent_slug")
+                slugs.append(f"{parent}/{ps}" if parent else ps)
         response.append({
             "id": site.id,
             "subdomain": site.subdomain,
@@ -550,6 +556,25 @@ async def create_site_direct(
                     claimed_by=user_id,
                 )
                 bg_db.add(site)
+                await bg_db.flush()  # ensure site.id is set
+
+                # Auto-install apps requested by AI
+                if gen_result.install_apps:
+                    from app.apps.models import App as AppModel, AppInstallation as AppInstModel
+                    for app_slug in gen_result.install_apps:
+                        app_row = await bg_db.execute(
+                            select(AppModel).where(
+                                AppModel.slug == app_slug,
+                                AppModel.is_active == True,  # noqa: E712
+                            )
+                        )
+                        app_obj = app_row.scalar_one_or_none()
+                        if app_obj:
+                            bg_db.add(AppInstModel(
+                                app_id=app_obj.id,
+                                site_id=site.id,
+                                installed_by=user_id,
+                            ))
 
                 # Update lead status
                 result = await bg_db.execute(
@@ -802,6 +827,12 @@ async def get_sitemap(
         page_slugs.append("gallery")
     if site_data.get("business", {}).get("email") or site_data.get("contact"):
         page_slugs.append("contact")
+    # Multi-page support
+    for page in site_data.get("pages") or []:
+        ps = page.get("slug", "")
+        if ps:
+            parent = page.get("parent_slug")
+            page_slugs.append(f"{parent}/{ps}" if parent else ps)
 
     urlset = Element("urlset")
     urlset.set("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9")

@@ -15,10 +15,22 @@ def normalize_site_data(raw: dict) -> dict:
     if not isinstance(raw, dict):
         return raw
 
-    # Already new format — no pages array
-    if "pages" not in raw or not isinstance(raw.get("pages"), list):
+    # Check if this is the OLD nested format (pages with nested sections arrays).
+    # The new multi-page format uses PageSchema objects with "slug" keys and is
+    # NOT migrated — it passes through as-is.
+    if "pages" not in raw or not isinstance(raw.get("pages"), list) or not raw["pages"]:
         return raw
 
+    first_page = raw["pages"][0]
+    if not isinstance(first_page, dict):
+        return raw
+
+    # New multi-page format: pages have a "slug" key (PageSchema).
+    # Old nested format: pages have a "sections" list with {type: ...} dicts.
+    if "slug" in first_page:
+        return raw
+
+    # Old nested format detected — migrate to flat schema.
     pages = raw.get("pages", [])
     sections = []
     for page in pages:

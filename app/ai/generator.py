@@ -33,6 +33,7 @@ class GenerationResult:
         model: str,
         cost_usd: float,
         duration_ms: int,
+        install_apps: list[str] | None = None,
     ):
         self.site_schema = site_schema
         self.tokens_used = tokens_used
@@ -41,6 +42,7 @@ class GenerationResult:
         self.model = model
         self.cost_usd = cost_usd
         self.duration_ms = duration_ms
+        self.install_apps = install_apps or []
 
 
 # Anthropic pricing per 1M tokens (USD) — https://docs.anthropic.com/en/docs/about-claude/models
@@ -67,6 +69,7 @@ _VALID_TOP_LEVEL_KEYS = {
     "pricing", "video", "logo_cloud", "custom_content", "banner",
     "ranking",
     "seo",
+    "pages", "install_apps",
 }
 
 
@@ -170,6 +173,13 @@ async def generate_site(
 
             # Parse and validate
             site_data = json.loads(raw_json)
+
+            # Extract install_apps before stripping unknown keys
+            install_apps = site_data.pop("install_apps", [])
+            if not isinstance(install_apps, list):
+                install_apps = []
+            install_apps = [s for s in install_apps if isinstance(s, str)]
+
             _strip_unknown_keys(site_data)
             _sanitize_ai_output(site_data)
 
@@ -200,6 +210,7 @@ async def generate_site(
                 model=model,
                 cost_usd=round(cost, 6),
                 duration_ms=duration_ms,
+                install_apps=install_apps,
             )
 
         except (json.JSONDecodeError, ValueError) as e:
