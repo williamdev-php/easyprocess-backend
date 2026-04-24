@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +74,10 @@ async def resolve_site(
         cache_key = f"resolve:sub:{subdomain}"
         cached = await cache.get(cache_key)
         if cached:
-            return cached
+            return JSONResponse(
+                content=cached,
+                headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=3600"},
+            )
 
         result = await db.execute(
             select(GeneratedSite).where(
@@ -90,7 +94,10 @@ async def resolve_site(
         cache_key = f"resolve:dom:{domain}"
         cached = await cache.get(cache_key)
         if cached:
-            return cached
+            return JSONResponse(
+                content=cached,
+                headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=3600"},
+            )
 
         # First check CustomDomain table
         cd_result = await db.execute(
@@ -159,7 +166,10 @@ async def resolve_site(
     cache_key = f"resolve:sub:{subdomain}" if subdomain else f"resolve:dom:{domain}"
     await cache.set(cache_key, response, ttl=300)
 
-    return response
+    return JSONResponse(
+        content=response,
+        headers={"Cache-Control": "public, max-age=300, stale-while-revalidate=3600"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +181,10 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
     """List all published sites (for sitemap generation)."""
     cached = await cache.get("sites:published")
     if cached:
-        return cached
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"},
+        )
 
     result = await db.execute(
         select(GeneratedSite).where(GeneratedSite.status == SiteStatus.PUBLISHED)
@@ -206,7 +219,10 @@ async def list_published_sites(db: AsyncSession = Depends(get_db)) -> list[dict]
         })
 
     await cache.set("sites:published", response, ttl=3600)
-    return response
+    return JSONResponse(
+        content=response,
+        headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -714,7 +730,10 @@ async def get_site(site_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Get full site data for frontend rendering. Cached."""
     cached = await cache.get(f"site:data:{site_id}")
     if cached:
-        return cached
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=60, stale-while-revalidate=3600"},
+        )
 
     result = await db.execute(
         select(GeneratedSite).where(GeneratedSite.id == site_id)
@@ -748,10 +767,19 @@ async def get_site(site_id: str, db: AsyncSession = Depends(get_db)) -> dict:
         response["created_at"] = site.created_at.isoformat() if site.created_at else None
         response["claim_token"] = site.claim_token if not site.claimed_by else None
 
-    # Only cache published sites (drafts may change)
+    # Published sites: long cache. Drafts: short cache to reduce DB load.
     if site.status == SiteStatus.PUBLISHED:
         await cache.set(f"site:data:{site_id}", response, ttl=3600)
-    return response
+        return JSONResponse(
+            content=response,
+            headers={"Cache-Control": "public, max-age=60, stale-while-revalidate=3600"},
+        )
+    else:
+        await cache.set(f"site:data:{site_id}", response, ttl=30)
+        return JSONResponse(
+            content=response,
+            headers={"Cache-Control": "private, max-age=30"},
+        )
 
 
 @router.get("/{site_id}/meta")
@@ -759,7 +787,10 @@ async def get_site_meta(site_id: str, db: AsyncSession = Depends(get_db)) -> dic
     """Get only metadata for SSR/SEO (smaller payload)."""
     cached = await cache.get(f"site:meta:{site_id}")
     if cached:
-        return cached
+        return JSONResponse(
+            content=cached,
+            headers={"Cache-Control": "public, max-age=60, stale-while-revalidate=3600"},
+        )
 
     result = await db.execute(
         select(GeneratedSite).where(GeneratedSite.id == site_id)
@@ -790,7 +821,16 @@ async def get_site_meta(site_id: str, db: AsyncSession = Depends(get_db)) -> dic
 
     if site.status == SiteStatus.PUBLISHED:
         await cache.set(f"site:meta:{site_id}", response, ttl=3600)
-    return response
+        return JSONResponse(
+            content=response,
+            headers={"Cache-Control": "public, max-age=60, stale-while-revalidate=3600"},
+        )
+    else:
+        await cache.set(f"site:meta:{site_id}", response, ttl=30)
+        return JSONResponse(
+            content=response,
+            headers={"Cache-Control": "private, max-age=30"},
+        )
 
 
 # ---------------------------------------------------------------------------
