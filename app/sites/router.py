@@ -648,28 +648,27 @@ async def create_site_from_url(
     await db.refresh(lead)
     lead_id = lead.id
 
-    # Run pipeline in background
-    import asyncio
-    from app.scraper.pipeline import run_pipeline
+    # Run pipeline in background (concurrency-controlled)
+    from app.pipeline_manager import pipeline_manager
     from app.database import get_db_session
 
-    async def _pipeline_bg():
+    async def _auto_claim():
+        """Auto-claim the generated site if user is authenticated."""
+        if not user_id:
+            return
         async with get_db_session() as bg_db:
-            await run_pipeline(bg_db, lead_id)
-            # If user is authenticated, auto-claim the site
-            if user_id:
-                result = await bg_db.execute(
-                    select(Lead)
-                    .where(Lead.id == lead_id)
-                    .options(selectinload(Lead.generated_site))
-                )
-                bg_lead = result.scalar_one_or_none()
-                if bg_lead and bg_lead.generated_site:
-                    bg_lead.generated_site.claimed_by = user_id
-                    bg_lead.created_by = user_id
-                    await bg_db.commit()
+            result = await bg_db.execute(
+                select(Lead)
+                .where(Lead.id == lead_id)
+                .options(selectinload(Lead.generated_site))
+            )
+            bg_lead = result.scalar_one_or_none()
+            if bg_lead and bg_lead.generated_site:
+                bg_lead.generated_site.claimed_by = user_id
+                bg_lead.created_by = user_id
+                await bg_db.commit()
 
-    asyncio.create_task(_pipeline_bg())
+    await pipeline_manager.enqueue(lead_id, post_pipeline_callback=_auto_claim)
 
     return {
         "ok": True,

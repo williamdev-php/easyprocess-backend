@@ -198,6 +198,7 @@ class ScrapedData(Base):
     contact_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     meta_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     raw_html_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    crawl_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

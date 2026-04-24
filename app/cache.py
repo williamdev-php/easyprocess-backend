@@ -156,61 +156,98 @@ class _RedisCache:
 
 class Cache:
     """
-    Auto-selecting cache: tries Redis first, falls back to in-memory.
-    Uses settings.effective_redis_url (internal in prod, proxy in dev).
+    Auto-selecting cache with circuit breaker: tries Redis first, falls back
+    to in-memory.  If Redis fails at runtime (after initial connection), the
+    cache automatically degrades to in-memory and periodically attempts to
+    reconnect.
     """
 
+    _RECONNECT_INTERVAL = 30  # seconds between Redis reconnect attempts
+
     def __init__(self) -> None:
+        self._redis_impl: _RedisCache | None = None
+        self._fallback = _InMemoryCache()
         self._impl: _RedisCache | _InMemoryCache | None = None
+        self._redis_url: str | None = None
+        self._last_reconnect_attempt: float = 0
 
     async def _get_impl(self) -> _RedisCache | _InMemoryCache:
         if self._impl is not None:
+            # If currently on fallback, periodically try to reconnect to Redis
+            if (
+                self._impl is self._fallback
+                and self._redis_url
+                and (time.time() - self._last_reconnect_attempt) > self._RECONNECT_INTERVAL
+            ):
+                self._last_reconnect_attempt = time.time()
+                try:
+                    r = _RedisCache(self._redis_url)
+                    client = await r._get_client()
+                    await client.ping()
+                    self._redis_impl = r
+                    self._impl = r
+                    logger.info("Redis reconnected successfully")
+                except Exception:
+                    pass  # stay on fallback
             return self._impl
 
         redis_url = settings.effective_redis_url
+        self._redis_url = redis_url
         if HAS_REDIS and redis_url:
             try:
                 r = _RedisCache(redis_url)
                 client = await r._get_client()
                 await client.ping()
+                self._redis_impl = r
                 self._impl = r
                 logger.info("Cache backend: Redis (%s)", redis_url.split("@")[-1] if "@" in redis_url else redis_url)
                 return self._impl
             except Exception as e:
                 logger.warning("Redis unavailable (%s), using in-memory cache", e)
 
-        self._impl = _InMemoryCache()
+        self._impl = self._fallback
         logger.info("Cache backend: in-memory")
         return self._impl
 
-    async def get(self, key: str) -> Any | None:
+    async def _safe_call(self, method: str, *args, **kwargs) -> Any:
+        """Call a cache method with automatic fallback on Redis errors."""
         impl = await self._get_impl()
-        return await impl.get(key)
+        try:
+            return await getattr(impl, method)(*args, **kwargs)
+        except Exception:
+            if impl is not self._fallback:
+                logger.warning(
+                    "Redis error during %s, falling back to in-memory", method
+                )
+                self._impl = self._fallback
+                self._last_reconnect_attempt = time.time()
+                # Retry on fallback
+                return await getattr(self._fallback, method)(*args, **kwargs)
+            raise
+
+    async def get(self, key: str) -> Any | None:
+        return await self._safe_call("get", key)
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        impl = await self._get_impl()
-        await impl.set(key, value, ttl)
+        await self._safe_call("set", key, value, ttl)
 
     async def delete(self, key: str) -> None:
-        impl = await self._get_impl()
-        await impl.delete(key)
+        await self._safe_call("delete", key)
 
     async def delete_pattern(self, pattern: str) -> int:
-        impl = await self._get_impl()
-        return await impl.delete_pattern(pattern)
+        return await self._safe_call("delete_pattern", pattern)
 
     async def exists(self, key: str) -> bool:
-        impl = await self._get_impl()
-        return await impl.exists(key)
+        return await self._safe_call("exists", key)
 
     async def flush(self) -> None:
-        impl = await self._get_impl()
-        await impl.flush()
+        await self._safe_call("flush")
 
     async def close(self) -> None:
-        if self._impl:
-            await self._impl.close()
-            self._impl = None
+        if self._redis_impl:
+            await self._redis_impl.close()
+            self._redis_impl = None
+        self._impl = None
 
     @property
     def backend(self) -> str:

@@ -14,6 +14,8 @@ import logging
 import random
 import time
 
+import asyncio
+
 import httpx
 
 from app.ai.prompts import build_prompt
@@ -23,6 +25,78 @@ from app.platform_settings.service import get_setting
 from app.sites.site_schema import CURRENT_VIEWER_VERSION, SiteSchema
 
 logger = logging.getLogger(__name__)
+
+# --- Shared HTTP client (connection pooling) ---------------------------------
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return a shared httpx client with connection pooling."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=60,
+            ),
+        )
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """Close the shared client (call on app shutdown)."""
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
+        _http_client = None
+
+
+# --- Retry helpers -----------------------------------------------------------
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}
+_MAX_API_RETRIES = 3
+_BASE_BACKOFF_SECONDS = 2.0
+
+
+async def _retry_api_call(call_fn, *, max_retries: int = _MAX_API_RETRIES):
+    """Retry an async API call with exponential backoff on transient errors.
+
+    Retries on: httpx network errors, timeout, and 429/5xx status codes.
+    Raises on: 4xx client errors (except 429), RuntimeError for credits.
+    """
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return await call_fn()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in _RETRYABLE_STATUS_CODES:
+                # Use Retry-After header if present (common for 429)
+                retry_after = e.response.headers.get("retry-after")
+                if retry_after and retry_after.isdigit():
+                    wait = float(retry_after)
+                else:
+                    wait = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+                logger.warning(
+                    "API returned %d, retrying in %.1fs (attempt %d/%d)",
+                    status, wait, attempt + 1, max_retries,
+                )
+                last_exc = e
+                await asyncio.sleep(wait)
+                continue
+            raise  # non-retryable status
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ConnectTimeout) as e:
+            wait = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+            logger.warning(
+                "API network error (%s), retrying in %.1fs (attempt %d/%d)",
+                type(e).__name__, wait, attempt + 1, max_retries,
+            )
+            last_exc = e
+            await asyncio.sleep(wait)
+            continue
+
+    raise RuntimeError(f"API call failed after {max_retries} retries: {last_exc}")
 
 
 class GenerationResult:
@@ -139,6 +213,7 @@ async def generate_site(
     screenshot_bytes: list[dict] | None = None,
     industry_prompt_hint: str | None = None,
     industry_default_sections: list[str] | None = None,
+    crawl_report: dict | None = None,
 ) -> GenerationResult:
     """
     Generate a complete SiteSchema using an LLM.
@@ -173,6 +248,7 @@ async def generate_site(
         visual_analysis=visual_analysis,
         industry_prompt_hint=industry_prompt_hint,
         industry_default_sections=industry_default_sections,
+        crawl_report=crawl_report,
     )
 
     last_error = None
@@ -272,7 +348,16 @@ async def _call_anthropic(
 
     user_content.append({"type": "text", "text": user})
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    payload = {
+        "model": model,
+        "max_tokens": 16000,
+        "system": system,
+        "messages": [{"role": "user", "content": user_content}],
+        "temperature": 0.5,
+    }
+
+    async def _do_request():
+        client = _get_http_client()
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -280,13 +365,7 @@ async def _call_anthropic(
                 "anthropic-version": "2023-06-01",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model,
-                "max_tokens": 16000,
-                "system": system,
-                "messages": [{"role": "user", "content": user_content}],
-                "temperature": 0.5,
-            },
+            json=payload,
         )
         if resp.status_code != 200:
             body = resp.text[:500]
@@ -296,16 +375,19 @@ async def _call_anthropic(
                     "Check that your ANTHROPIC_API_KEY belongs to the workspace where you added credits."
                 )
             resp.raise_for_status()
-        data = resp.json()
+        return resp
 
-        content = data["content"][0]["text"]
-        # Extract JSON from potential markdown code blocks
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+    resp = await _retry_api_call(_do_request)
+    data = resp.json()
 
-        return content, data["usage"]["input_tokens"], data["usage"]["output_tokens"]
+    content = data["content"][0]["text"]
+    # Extract JSON from potential markdown code blocks
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+
+    return content, data["usage"]["input_tokens"], data["usage"]["output_tokens"]
 
 
 async def _call_gemini(
@@ -340,34 +422,39 @@ async def _call_gemini(
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    payload = {
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": 0.5,
+            "maxOutputTokens": 16000,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    async def _do_request():
+        client = _get_http_client()
         resp = await client.post(
             url,
             headers={"Content-Type": "application/json"},
-            json={
-                "system_instruction": {"parts": [{"text": system}]},
-                "contents": [{"parts": parts}],
-                "generationConfig": {
-                    "temperature": 0.5,
-                    "maxOutputTokens": 16000,
-                    "responseMimeType": "application/json",
-                },
-            },
+            json=payload,
         )
         if resp.status_code != 200:
             resp.raise_for_status()
+        return resp
 
-        data = resp.json()
-        content = data["candidates"][0]["content"]["parts"][0]["text"]
+    resp = await _retry_api_call(_do_request)
+    data = resp.json()
+    content = data["candidates"][0]["content"]["parts"][0]["text"]
 
-        # Extract JSON from potential markdown code blocks
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+    # Extract JSON from potential markdown code blocks
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
 
-        usage = data.get("usageMetadata", {})
-        input_tokens = usage.get("promptTokenCount", 0)
-        output_tokens = usage.get("candidatesTokenCount", 0)
+    usage = data.get("usageMetadata", {})
+    input_tokens = usage.get("promptTokenCount", 0)
+    output_tokens = usage.get("candidatesTokenCount", 0)
 
-        return content, input_tokens, output_tokens
+    return content, input_tokens, output_tokens

@@ -1164,8 +1164,9 @@ class SiteMutation:
             # Invalidate dashboard cache
             await cache.delete("admin:dashboard_stats")
 
-            # Trigger pipeline in background
-            asyncio.create_task(_run_pipeline_bg(lead_id))
+            # Trigger pipeline in background (concurrency-controlled)
+            from app.pipeline_manager import pipeline_manager
+            await pipeline_manager.enqueue(lead_id)
 
             # Resolve industry name if set
             industry_name = None
@@ -1214,7 +1215,9 @@ class SiteMutation:
             if not lead:
                 raise ValueError("Lead not found")
 
-        asyncio.create_task(_run_pipeline_bg(lead_id))
+        from app.pipeline_manager import pipeline_manager
+        if not await pipeline_manager.enqueue(lead_id):
+            raise ValueError("Pipeline already running for this lead")
         return True
 
     @strawberry.mutation

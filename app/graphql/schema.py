@@ -21,17 +21,27 @@ logger = logging.getLogger(__name__)
 
 
 class GraphQLRateLimitExtension(SchemaExtension):
-    """Simple in-memory rate limiter for GraphQL mutations.
+    """In-memory rate limiter for GraphQL mutations.
 
-    Limits each IP to MAX_MUTATIONS mutations per WINDOW_SECONDS window.
-    Queries are not rate-limited here (they are read-only).
+    General limit: MAX_MUTATIONS mutations per WINDOW_SECONDS window per IP.
+    Heavy mutations (site generation): stricter per-IP limits.
     """
 
     WINDOW_SECONDS = 60
     MAX_MUTATIONS = 30
 
+    # Stricter limits for expensive mutations (per IP, per window)
+    _HEAVY_MUTATIONS = {
+        "createLead": 5,
+        "scrapeLead": 5,
+        "create_lead": 5,
+        "scrape_lead": 5,
+    }
+    _HEAVY_WINDOW_SECONDS = 60
+
     # {ip: [(timestamp, ...), ...]}
     _buckets: dict[str, list[float]] = defaultdict(list)
+    _heavy_buckets: dict[str, list[float]] = defaultdict(list)
 
     def on_operation(self):
         request = self.execution_context.context.get("request")
@@ -52,9 +62,9 @@ class GraphQLRateLimitExtension(SchemaExtension):
         if is_mutation:
             ip = request.client.host if request.client else "unknown"
             now = time.monotonic()
-            bucket = self._buckets[ip]
 
-            # Prune expired entries
+            # --- General mutation rate limit ---
+            bucket = self._buckets[ip]
             cutoff = now - self.WINDOW_SECONDS
             self._buckets[ip] = bucket = [t for t in bucket if t > cutoff]
 
@@ -66,6 +76,33 @@ class GraphQLRateLimitExtension(SchemaExtension):
                 )
 
             bucket.append(now)
+
+            # --- Per-mutation type rate limit for heavy operations ---
+            selections = getattr(doc.definitions[0], "selection_set", None)
+            if selections:
+                for sel in selections.selections:
+                    mutation_name = getattr(sel, "name", None)
+                    if mutation_name:
+                        name_str = mutation_name.value
+                        max_allowed = self._HEAVY_MUTATIONS.get(name_str)
+                        if max_allowed is not None:
+                            heavy_key = f"{ip}:{name_str}"
+                            h_bucket = self._heavy_buckets[heavy_key]
+                            h_cutoff = now - self._HEAVY_WINDOW_SECONDS
+                            self._heavy_buckets[heavy_key] = h_bucket = [
+                                t for t in h_bucket if t > h_cutoff
+                            ]
+                            if len(h_bucket) >= max_allowed:
+                                logger.warning(
+                                    "Heavy mutation rate limit exceeded: %s for IP %s",
+                                    name_str, ip,
+                                )
+                                from graphql import GraphQLError
+                                raise GraphQLError(
+                                    f"Rate limit exceeded for {name_str}. "
+                                    f"Max {max_allowed} per minute."
+                                )
+                            h_bucket.append(now)
 
         yield
 

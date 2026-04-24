@@ -8,6 +8,7 @@ Triggered on-demand when an admin creates a lead via GraphQL.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import sys
@@ -20,9 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from bs4 import BeautifulSoup
+
 from app.ai.generator import generate_site
 from app.ai.vision_analyzer import analyze_screenshots
 from app.cache import cache
+from app.scraper.crawler import discover_nav_links, crawl_subpages, build_crawl_report
 from app.scraper.extractor import extract_all, fetch_page
 from app.scraper.image_downloader import download_and_store_images
 from app.scraper.screenshot import capture_screenshot_bytes
@@ -83,10 +87,22 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             await db.commit()
 
             logger.info("Scraping %s", lead.website_url)
-            html, final_url = await fetch_page(lead.website_url)
 
-            # --- Step 2: Extract ---
-            data = await extract_all(html, final_url)
+            # Check scrape cache (keyed by URL hash) to skip expensive re-scraping
+            url_hash = hashlib.sha256(lead.website_url.encode()).hexdigest()[:16]
+            scrape_cache_key = f"scrape:{url_hash}"
+            cached_data = await cache.get(scrape_cache_key)
+
+            if cached_data and isinstance(cached_data, dict):
+                logger.info("Using cached scrape data for %s", lead.website_url)
+                homepage_html = None  # not needed when using cache
+                final_url = lead.website_url
+                data = cached_data
+            else:
+                homepage_html, final_url = await fetch_page(lead.website_url)
+
+                # --- Step 2: Extract ---
+                data = await extract_all(homepage_html, final_url)
 
             contact = data["contact_info"]
             emails = contact.get("emails", [])
@@ -148,10 +164,75 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.status = LeadStatus.SCRAPED
             await db.commit()
 
+            # Cache scrape results for 1 hour (speeds up re-generation of same URL)
+            try:
+                cacheable_data = {
+                    k: v for k, v in data.items()
+                    if k not in ("visual_analysis",)  # exclude non-serializable/large data
+                }
+                await cache.set(scrape_cache_key, cacheable_data, ttl=3600)
+            except Exception:
+                logger.debug("Failed to cache scrape data for %s", lead.website_url)
+
             logger.info(
                 "Scraped %s: emails=%s, phones=%s, images=%d",
                 lead.website_url, emails, phones, len(data["images"]),
             )
+
+            # --- Step 2b2: Multi-page crawl ---
+            crawl_report_data = None
+            try:
+                if homepage_html:
+                    homepage_soup = BeautifulSoup(homepage_html, "lxml")
+                    nav_pages = discover_nav_links(homepage_soup, final_url)
+                    if nav_pages:
+                        logger.info(
+                            "Discovered %d subpages for %s, crawling...",
+                            len(nav_pages), lead.website_url,
+                        )
+                        await crawl_subpages(nav_pages, final_url)
+                        crawl_report = build_crawl_report(final_url, homepage_soup, nav_pages)
+                        crawl_report_data = crawl_report.to_dict()
+
+                        # Merge subpage images into main image list (with context)
+                        subpage_images = crawl_report.all_images
+                        if subpage_images:
+                            existing_urls = {img.get("url") for img in data["images"]}
+                            new_images = [
+                                img for img in subpage_images
+                                if img.get("url") and img["url"] not in existing_urls
+                            ]
+                            data["images"].extend(new_images[:20])  # add up to 20 extra
+                            logger.info(
+                                "Added %d subpage images (total: %d)",
+                                len(new_images[:20]), len(data["images"]),
+                            )
+
+                        # Enrich texts with subpage content
+                        _merge_subpage_content(data, nav_pages)
+
+                        data["crawl_report"] = crawl_report_data
+                        logger.info(
+                            "Crawl complete for %s: %d pages, notes=%d",
+                            lead.website_url,
+                            crawl_report.pages_crawled,
+                            len(crawl_report.generation_notes),
+                        )
+                    else:
+                        logger.info("No subpages discovered for %s", lead.website_url)
+                elif cached_data and cached_data.get("crawl_report"):
+                    crawl_report_data = cached_data["crawl_report"]
+                    data["crawl_report"] = crawl_report_data
+            except Exception as crawl_err:
+                logger.warning(
+                    "Multi-page crawl failed for %s, continuing without: %s",
+                    lead.website_url, crawl_err,
+                )
+
+            # Persist crawl report to scraped data
+            if crawl_report_data and lead.scraped_data:
+                lead.scraped_data.crawl_report = crawl_report_data
+                await db.commit()
 
             # --- Step 2c: Screenshot + Vision Analysis ---
             screenshot_data = None
@@ -219,6 +300,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 screenshot_bytes=screenshot_data,
                 industry_prompt_hint=_industry_hint,
                 industry_default_sections=_industry_sections,
+                crawl_report=data.get("crawl_report"),
             )
 
             # Inject favicon_url into generated site meta (AI may not include it)
@@ -292,3 +374,51 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.error_message = error_msg
             await db.commit()
         await cache.delete("admin:dashboard_stats")
+
+
+def _merge_subpage_content(data: dict, pages) -> None:
+    """Enrich homepage texts dict with content found on subpages.
+
+    Merges about text, services, FAQ, team, and features from subpages
+    into the main data dict — only if the homepage didn't already have them.
+    """
+    texts = data.get("texts", {})
+
+    for page in pages:
+        if not page.content:
+            continue
+
+        # About text — prefer subpage version if homepage had none
+        if page.page_type == "about" and not texts.get("about"):
+            about = page.content.get("about")
+            if about:
+                texts["about"] = about
+            elif page.content.get("paragraphs"):
+                # Use first few paragraphs as about text
+                texts["about"] = " ".join(page.content["paragraphs"][:3])
+
+        # Services from services page
+        if page.page_type == "services":
+            sub_services = page.content.get("services", [])
+            if sub_services and len(sub_services) > len(texts.get("services", [])):
+                texts["services"] = sub_services
+
+        # FAQ from FAQ page
+        if page.page_type == "faq":
+            sub_faq = page.content.get("faq_items", [])
+            if sub_faq and len(sub_faq) > len(texts.get("faq_items", [])):
+                texts["faq_items"] = sub_faq
+
+        # Team from team page
+        if page.page_type == "team":
+            sub_team = page.content.get("team_members", [])
+            if sub_team and len(sub_team) > len(texts.get("team_members", [])):
+                texts["team_members"] = sub_team
+
+        # Features from any relevant page
+        if page.page_type in ("about", "services"):
+            sub_features = page.content.get("features", [])
+            if sub_features and len(sub_features) > len(texts.get("features", [])):
+                texts["features"] = sub_features
+
+    data["texts"] = texts

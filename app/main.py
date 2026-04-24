@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,7 @@ from sqlalchemy import text
 from app.cache import cache
 from app.config import settings
 from app.rate_limit import limiter
-from app.database import engine, Base, SCHEMA
+from app.database import engine, async_session, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
 from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog, SuperuserPromotion  # noqa: F401
@@ -51,6 +52,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Supabase Storage bucket '%s' is accessible", settings.SUPABASE_STORAGE_BUCKET)
         else:
             logger.warning("Supabase Storage bucket '%s' is NOT accessible — image storage will fail", settings.SUPABASE_STORAGE_BUCKET)
+
+    # Start stuck-lead recovery loop (every 5 minutes)
+    async def _stuck_lead_recovery_loop():
+        from app.sites.models import Lead, LeadStatus
+        from sqlalchemy import select, and_
+        await asyncio.sleep(120)  # wait for app to stabilize
+        while True:
+            try:
+                threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(Lead).where(
+                            and_(
+                                Lead.status.in_([LeadStatus.SCRAPING, LeadStatus.GENERATING]),
+                                Lead.updated_at < threshold,
+                            )
+                        )
+                    )
+                    stuck_leads = result.scalars().all()
+                    if stuck_leads:
+                        for lead in stuck_leads:
+                            lead.status = LeadStatus.FAILED
+                            lead.error_message = "Pipeline timed out (stuck recovery)"
+                            logger.warning("Recovered stuck lead %s (was %s)", lead.id, lead.status)
+                        await session.commit()
+                        logger.info("Recovered %d stuck leads", len(stuck_leads))
+            except Exception:
+                logger.exception("Stuck lead recovery failed")
+            await asyncio.sleep(300)  # every 5 minutes
+
+    stuck_recovery_task = asyncio.create_task(_stuck_lead_recovery_loop())
 
     # Start daily expiration check background task with exponential backoff
     async def _expiration_loop():
@@ -100,7 +132,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Graceful shutdown: cancel background tasks and let in-flight work drain.
     expiration_task.cancel()
-    tasks_to_cancel = [expiration_task]
+    stuck_recovery_task.cancel()
+    tasks_to_cancel = [expiration_task, stuck_recovery_task]
     if smartlead_task is not None:
         smartlead_task.cancel()
         tasks_to_cancel.append(smartlead_task)
@@ -109,6 +142,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await task
         except asyncio.CancelledError:
             pass
+    # Close shared httpx client used by AI generator
+    from app.ai.generator import close_http_client
+    await close_http_client()
     await cache.close()
     await engine.dispose()
     logger.info("Shutdown complete")
@@ -172,3 +208,10 @@ async def health() -> dict:
         from app.storage.supabase import check_storage_health
         result["storage"] = check_storage_health()
     return result
+
+
+@app.get("/health/pipeline")
+async def pipeline_status() -> dict:
+    """Return current pipeline concurrency stats for monitoring."""
+    from app.pipeline_manager import pipeline_manager
+    return pipeline_manager.stats()

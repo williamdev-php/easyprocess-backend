@@ -96,6 +96,17 @@ Om kunden nämner chatt, kundtjänst eller livechatt, inkludera:
 Tillgängliga appar: "blog", "chat". Inkludera BARA om det finns tydlig anledning från kundens beskrivning.
 Om ingen app behövs, utelämna install_apps eller sätt till tom lista.
 
+MULTI-PAGE CRAWL-DATA:
+Du kan få en sektion med "MULTI-PAGE CRAWL" som innehåller data från flera undersidor på den befintliga sajten.
+Använd denna information intelligent:
+- Om en blogg/nyhetssida hittades → inkludera "blog" i install_apps.
+- Om en bokningssida hittades → se till att CTA:er fokuserar på bokning.
+- Om en prissida hittades → inkludera pricing-sektionen.
+- Om portfolio/referenssida hittades → inkludera gallery med de bilderna.
+- Innehåll från undersidor (om-oss, tjänster, FAQ, team) har redan berikats i scrapad data ovan.
+- Använd GENERERINGSNOTERNA aktivt — de är specifika rekommendationer baserade på crawl-analysen.
+- Bilder med source_page-kontext visar var bilderna användes på den gamla sajten — placera dem smart.
+
 FLERSIDIGT STÖD (pages):
 Startsidan byggs av de vanliga top-level sektionerna (hero, about, services, etc.).
 Utöver startsidan kan du skapa SEPARATA undersidor via "pages"-arrayen.
@@ -204,6 +215,8 @@ BILDER (använd ENBART dessa URL:er)
 VISUELL ANALYS AV BEFINTLIG HEMSIDA
 ════════���══════════════════════════════
 {visual_analysis_summary}
+
+{crawl_report_section}
 
 {industry_hint}
 
@@ -406,6 +419,7 @@ def build_prompt(
     visual_analysis: dict | None = None,
     industry_prompt_hint: str | None = None,
     industry_default_sections: list[str] | None = None,
+    crawl_report: dict | None = None,
 ) -> tuple[str, str]:
     """Build (system_prompt, user_prompt) pair."""
 
@@ -554,6 +568,13 @@ def build_prompt(
                         line += f" (alt: {alt})"
                     if w != "?" and h != "?":
                         line += f" [{w}x{h}]"
+                    # Include source page context if from subpage crawl
+                    src_page = img.get("source_page")
+                    ctx_heading = img.get("context_heading")
+                    if src_page:
+                        line += f" [från: {src_page}]"
+                    if ctx_heading:
+                        line += f" [sektion: {ctx_heading[:60]}]"
                     img_parts.append(line)
         if img_parts:
             images_summary = "\n".join(img_parts)
@@ -609,6 +630,68 @@ def build_prompt(
         if va_parts:
             visual_analysis_summary = "\n".join(va_parts)
 
+    # --- Crawl report (multi-page data) ---
+    crawl_report_section = ""
+    if crawl_report:
+        cr_parts = []
+
+        # Site map
+        site_map = crawl_report.get("site_map", [])
+        if site_map:
+            cr_parts.append("SIDKARTA (hittade undersidor):")
+            for page in site_map:
+                label = page.get("nav_label", "?")
+                ptype = page.get("page_type", "other")
+                path = page.get("path", "?")
+                img_count = page.get("image_count", 0)
+                content_summary = page.get("content_summary")
+                cr_parts.append(f"  - [{ptype}] {label} ({path}) — {img_count} bilder")
+
+                # Include key content from subpages
+                if content_summary:
+                    if content_summary.get("about"):
+                        cr_parts.append(f"    Om-text: {_sanitize_for_prompt(content_summary['about'], 300)}")
+                    if content_summary.get("services"):
+                        svc_titles = [s.get("title", "") for s in content_summary["services"][:6]]
+                        cr_parts.append(f"    Tjänster: {', '.join(svc_titles)}")
+                    if content_summary.get("faq_items"):
+                        cr_parts.append(f"    FAQ: {len(content_summary['faq_items'])} frågor")
+                    if content_summary.get("team_members"):
+                        names = [m.get("name", "") for m in content_summary["team_members"][:5]]
+                        cr_parts.append(f"    Team: {', '.join(names)}")
+                    if content_summary.get("headings"):
+                        h_texts = [h.get("text", "") for h in content_summary["headings"][:8]]
+                        cr_parts.append(f"    Rubriker: {', '.join(h_texts)}")
+
+        # Flags
+        flags = []
+        if crawl_report.get("has_blog"):
+            count = crawl_report.get("blog_post_count", 0)
+            flags.append(f"Blogg hittad ({count} inlägg)" if count else "Blogg/nyheter hittad")
+        if crawl_report.get("has_booking"):
+            flags.append("Bokningssida hittad")
+        if crawl_report.get("has_pricing"):
+            flags.append("Prissida hittad")
+        if crawl_report.get("has_portfolio"):
+            flags.append("Portfolio/referenssida hittad")
+        if flags:
+            cr_parts.append(f"\nSajt-egenskaper: {', '.join(flags)}")
+
+        # Generation notes
+        gen_notes = crawl_report.get("generation_notes", [])
+        if gen_notes:
+            cr_parts.append("\nGENERERINGSNOTER (baserat på crawl-analys):")
+            for note in gen_notes:
+                cr_parts.append(f"  • {note}")
+
+        if cr_parts:
+            crawl_report_section = (
+                "\n═══════════════════════════════════════\n"
+                "MULTI-PAGE CRAWL — ANALYS AV HELA SAJTEN\n"
+                "═══════════════════════════════════════\n"
+                + "\n".join(cr_parts)
+            )
+
     # --- Social links ---
     social_str = "Inga"
     if social_links:
@@ -637,6 +720,7 @@ def build_prompt(
         visual_colors_section=visual_colors_section,
         images_summary=images_summary,
         visual_analysis_summary=visual_analysis_summary,
+        crawl_report_section=crawl_report_section,
         industry_hint=industry_hint,
         recommended_sections=recommended_sections,
         logo_url=logo_url or "",
