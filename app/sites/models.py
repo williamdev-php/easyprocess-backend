@@ -678,3 +678,81 @@ class GscConnection(Base):
         Index("idx_gsc_connections_user_id", "user_id"),
         {"schema": SCHEMA},
     )
+
+
+# ---------------------------------------------------------------------------
+# AI Chat Editor
+# ---------------------------------------------------------------------------
+
+class AIChatMessageRole(str, enum.Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class AIChatSession(Base):
+    """A chat session between a user and the AI editor for a specific site."""
+    __tablename__ = "ai_chat_sessions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    site_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(f"{SCHEMA}.generated_sites.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    messages: Mapped[list["AIChatMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="AIChatMessage.created_at"
+    )
+
+    __table_args__ = (
+        Index("idx_ai_chat_sessions_site_id", "site_id"),
+        Index("idx_ai_chat_sessions_user_active", "user_id", "site_id", "is_active"),
+        {"schema": SCHEMA},
+    )
+
+
+class AIChatMessage(Base):
+    """A single message in an AI chat editor session."""
+    __tablename__ = "ai_chat_messages"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey(f"{SCHEMA}.ai_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[AIChatMessageRole] = mapped_column(
+        Enum(AIChatMessageRole), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    site_data_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    session: Mapped["AIChatSession"] = relationship(back_populates="messages")
+
+    __table_args__ = (
+        Index("idx_ai_chat_messages_session_id", "session_id"),
+        {"schema": SCHEMA},
+    )

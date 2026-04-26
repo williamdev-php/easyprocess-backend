@@ -22,7 +22,7 @@ from app.database import engine, async_session, get_db_session, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
 from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog, SuperuserPromotion  # noqa: F401
-from app.sites.models import Industry, Lead, ScrapedData, GeneratedSite, SiteVersion, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase, GscConnection  # noqa: F401
+from app.sites.models import Industry, Lead, ScrapedData, GeneratedSite, SiteVersion, OutreachEmail, InboundEmail, PageView, CustomDomain, DomainPurchase, GscConnection, AIChatSession, AIChatMessage  # noqa: F401
 from app.billing.models import Subscription, Payment, BillingDetails  # noqa: F401
 from app.media.models import MediaFile  # noqa: F401
 from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noqa: F401
@@ -490,6 +490,7 @@ from app.autoblogger.health import router as autoblogger_health_router  # noqa: 
 from app.oauth.router import router as oauth_router  # noqa: E402
 from app.oauth.blog_api import router as oauth_blog_router  # noqa: E402
 from app.newsletter.router import router as newsletter_router  # noqa: E402
+from app.sites.ai_chat import router as ai_chat_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -514,6 +515,7 @@ app.include_router(oauth_blog_router)
 app.include_router(feyra_router)
 app.include_router(feyra_api_router)
 app.include_router(newsletter_router)
+app.include_router(ai_chat_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402
