@@ -312,10 +312,20 @@ def _deduplicate_pages_vs_sections(site_data: dict) -> None:
             logger.info("Dedup: custom page covers '%s' — nulling section", section_key)
             site_data[section_key] = None
 
-    # Trim long page titles (strip " | BusinessName" pattern)
+    # Clean up page data
     for p in pages:
         if not isinstance(p, dict):
             continue
+        # Strip leading slashes from slugs (AI sometimes writes "/om-oss" instead of "om-oss")
+        # A leading slash in a slug causes "//om-oss" → protocol-relative URL → broken link
+        slug = p.get("slug", "")
+        if slug.startswith("/"):
+            p["slug"] = slug.lstrip("/")
+        parent = p.get("parent_slug")
+        if isinstance(parent, str) and parent.startswith("/"):
+            p["parent_slug"] = parent.lstrip("/")
+
+        # Trim long page titles (strip " | BusinessName" pattern)
         title = p.get("title", "")
         if " | " in title:
             p["title"] = title.split(" | ")[0].strip()

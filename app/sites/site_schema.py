@@ -645,6 +645,20 @@ class PageSchema(BaseModel):
     show_in_nav: bool = True
     nav_order: int = 0
 
+    @field_validator("slug")
+    @classmethod
+    def clean_slug(cls, v: str) -> str:
+        """Strip leading slashes — slugs are path segments, not full paths."""
+        return v.strip().lstrip("/")
+
+    @field_validator("parent_slug")
+    @classmethod
+    def clean_parent_slug(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip().lstrip("/")
+        return cleaned or None
+
 
 # ---------------------------------------------------------------------------
 # Full site schema
