@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     SHOPIFY_API_SECRET: str = ""
     SHOPIFY_SCOPES: str = "write_content,read_content"  # For blog posts
 
+    # Site generation rate limiting (set to false to disable during development)
+    SITE_RATE_LIMIT_ENABLED: bool = True
+
     # Viewer
     VIEWER_URL: str = "http://localhost:3001"
     REVALIDATION_SECRET: str = ""

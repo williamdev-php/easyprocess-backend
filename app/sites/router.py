@@ -346,6 +346,10 @@ async def _check_site_creation_rate(
     request: Request,
 ) -> None:
     """Enforce daily site creation limits based on plan and IP."""
+    from app.config import settings as _cfg
+    if not _cfg.SITE_RATE_LIMIT_ENABLED:
+        return
+
     from datetime import timedelta
     from app.auth.service import get_client_ip
 

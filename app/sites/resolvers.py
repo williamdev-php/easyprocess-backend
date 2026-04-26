@@ -111,6 +111,9 @@ async def _require_subscription(db, user: User, action: str = "This action") -> 
 
 async def _check_site_limit(db, user: User) -> None:
     """Free plan: max 1 site. Raise if user already has one and has no subscription."""
+    from app.config import settings as _cfg
+    if not _cfg.SITE_RATE_LIMIT_ENABLED:
+        return
     if user.is_superuser:
         return
     if await _has_active_subscription(db, user):
