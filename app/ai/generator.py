@@ -232,6 +232,80 @@ def _promote_home_page_sections(site_data: dict) -> None:
         )
 
 
+# Mapping from custom-page slug patterns to the top-level section key they replace.
+# Organized by language for i18n support. Add new languages as needed.
+_SECTION_SLUGS_BY_LANG: dict[str, dict[str, list[str]]] = {
+    "sv": {
+        "about": ["om-oss", "om"],
+        "services": ["tjanster", "vara-tjanster"],
+        "gallery": ["galleri"],
+        "faq": ["vanliga-fragor"],
+    },
+    "en": {
+        "about": ["about-us"],
+        "services": ["our-services"],
+        "gallery": [],
+        "faq": ["frequently-asked-questions"],
+    },
+}
+
+
+def _build_slug_to_section_map() -> dict[str, str]:
+    """Build a flat slug→section mapping from all languages."""
+    mapping: dict[str, str] = {}
+    for section_key in ("about", "services", "gallery", "faq"):
+        # The English key itself always maps
+        mapping[section_key] = section_key
+        for _lang, sections in _SECTION_SLUGS_BY_LANG.items():
+            for slug in sections.get(section_key, []):
+                mapping[slug] = section_key
+    return mapping
+
+
+_PAGE_SLUG_TO_SECTION = _build_slug_to_section_map()
+
+
+def _deduplicate_pages_vs_sections(site_data: dict) -> None:
+    """Null out top-level sections when a custom page covers the same topic.
+
+    This prevents duplicate navigation entries (e.g. standard "Om oss" link
+    AND a custom "Om oss" page link).  The custom page is always preferred
+    because it contains richer, site-specific content.
+
+    Contact is intentionally excluded — the standard contact template is the
+    default, and custom contact pages are opt-in.
+    """
+    pages = site_data.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return
+
+    page_slugs = {
+        p.get("slug")
+        for p in pages
+        if isinstance(p, dict) and not p.get("parent_slug")
+    }
+
+    for slug in page_slugs:
+        section_key = _PAGE_SLUG_TO_SECTION.get(slug)
+        if section_key and site_data.get(section_key) is not None:
+            logger.info(
+                "Dedup: custom page '%s' covers section '%s' — nulling section",
+                slug, section_key,
+            )
+            site_data[section_key] = None
+
+    # Trim long page titles (strip " | BusinessName" pattern)
+    for p in pages:
+        if not isinstance(p, dict):
+            continue
+        title = p.get("title", "")
+        if " | " in title:
+            p["title"] = title.split(" | ")[0].strip()
+        # Keep title short — max 30 chars
+        if len(p.get("title", "")) > 30:
+            p["title"] = p["title"][:29].rstrip() + "…"
+
+
 def _sanitize_ai_output(site_data: dict) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
@@ -267,6 +341,10 @@ def _sanitize_ai_output(site_data: dict) -> None:
         for _key, val in settings.items():
             if isinstance(val, dict) and val.get("animation") not in valid_anims:
                 val["animation"] = "fade-up"
+
+    # Deduplicate: if a custom page covers a standard section, null out the
+    # top-level section so the viewer doesn't show both in navigation.
+    _deduplicate_pages_vs_sections(site_data)
 
 
 async def generate_site(

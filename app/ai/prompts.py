@@ -127,6 +127,25 @@ REGLER FÖR PAGES:
 - show_in_nav: true om sidan ska visas i navigationen, false om den är en child-sida eller dold.
 - nav_order: ordning i navigationen (lägre = först).
 
+VIKTIGT — UNDVIK DUBBLETTER:
+- Alla innehållssidor (Om oss, Tjänster, Galleri, FAQ) ska skapas som CUSTOM PAGES i pages-arrayen — inte som top-level sektioner.
+- Om du skapar en page som ersätter about → sätt top-level "about" till null.
+- Om du skapar en page som ersätter services → sätt top-level "services" till null.
+- Om du skapar en page som ersätter gallery → sätt top-level "gallery" till null.
+- Om du skapar en page som ersätter faq → sätt top-level "faq" till null.
+- Kontakt-sidan kan använda top-level "contact"-sektionen (standard-mall), men om du skapar en custom kontaktsida i pages, sätt "contact" till null.
+- Startsidan behåller BARA: hero, korta snippets (about, services), testimonials, CTA. Fullständigt innehåll läggs i pages.
+
+KORTA TITLAR FÖR NAVIGATION:
+- Page title ska vara KORT (max 2-3 ord). Exempel: "Om oss", "Tjänster", "About", "Services".
+- Lägg ALDRIG företagsnamnet i page title. ALDRIG "Tjänster | Nagelsalongen".
+- meta.title kan vara längre för SEO (t.ex. "Tjänster - Nagelsalongen Sundsvall").
+
+SLUGGAR (anpassa efter språk):
+- Svenska (sv): "om-oss", "tjanster", "galleri", "kontakt", "boka-tid", "vanliga-fragor"
+- Engelska (en): "about", "services", "gallery", "contact", "book", "faq"
+- Använd ALLTID sluggar på samma språk som meta.language.
+
 NÄR SKA DU SKAPA PAGES:
 - Enkel affärsidé (frisör, bilrekond): 2-3 sidor. T.ex. startsida + "Om oss" + "Boka tid".
 - Tjänsteföretag: 2-4 sidor. T.ex. startsida + "Tjänster" + "Om oss" + "Kontakt".
@@ -136,10 +155,10 @@ NÄR SKA DU SKAPA PAGES:
 
 STRATEGI:
 1. Startsidan: hero + korta snippets (about-snippet, services-snippet, testimonials, CTA).
-2. Undersidor: fullständiga versioner av about, services, FAQ, kontakt, etc.
-3. Om startsidan har en about-snippet → skapa en /om-oss sida med utförligare about + features/stats.
-4. Om startsidan har services-snippet → skapa en /tjanster sida med alla tjänster i detalj.
-5. Kontaktsida är nästan alltid relevant som egen sida.
+2. Undersidor: fullständiga versioner av about, services, FAQ, kontakt, etc. som CUSTOM PAGES.
+3. Om startsidan har en about-snippet → skapa en /om-oss page med utförligare about + features/stats. Sätt top-level about till null.
+4. Om startsidan har services-snippet → skapa en /tjanster page med alla tjänster i detalj. Sätt top-level services till null.
+5. Kontaktsida kan vara standard (top-level contact) eller custom page — men ALDRIG båda.
 
 """
 
