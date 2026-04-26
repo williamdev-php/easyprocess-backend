@@ -5,8 +5,11 @@ but do NOT commit; the caller's session manages transaction boundaries.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -19,6 +22,7 @@ from app.autoblogger.models import (
 )
 
 FREE_TIER_CREDITS = 5
+LONG_FORM_WORD_COUNT = 2000
 
 # Plan credit allocations (canonical source — billing.py imports from here)
 PLAN_CREDITS = {
@@ -64,9 +68,26 @@ async def validate_credits(
 ) -> CreditBalance:
     """Validate user has sufficient credits. Returns the balance.
 
+    Uses SELECT FOR UPDATE to prevent concurrent overdraw.
     Raises ``HTTPException(402)`` if insufficient.
     """
-    balance = await get_or_create_credit_balance(db, user_id)
+    result = await db.execute(
+        select(CreditBalance)
+        .where(CreditBalance.user_id == user_id)
+        .with_for_update()
+    )
+    balance = result.scalar_one_or_none()
+
+    if balance is None:
+        # Create with lock — use get_or_create then re-lock
+        balance = await get_or_create_credit_balance(db, user_id)
+        # Re-fetch with lock
+        result = await db.execute(
+            select(CreditBalance)
+            .where(CreditBalance.user_id == user_id)
+            .with_for_update()
+        )
+        balance = result.scalar_one()
 
     if balance.credits_remaining < required:
         raise HTTPException(
@@ -94,9 +115,18 @@ async def deduct_credits(
 ) -> CreditBalance:
     """Deduct credits and create a transaction log entry.
 
+    Uses SELECT FOR UPDATE for atomic deduction.
     Does **not** validate — caller must call :func:`validate_credits` first.
     """
-    balance = await get_or_create_credit_balance(db, user_id)
+    result = await db.execute(
+        select(CreditBalance)
+        .where(CreditBalance.user_id == user_id)
+        .with_for_update()
+    )
+    balance = result.scalar_one_or_none()
+
+    if balance is None:
+        balance = await get_or_create_credit_balance(db, user_id)
 
     balance.credits_remaining -= amount
     balance.credits_used_total += amount
@@ -120,8 +150,8 @@ async def deduct_credits(
 # ---------------------------------------------------------------------------
 
 def calculate_credits_for_post(word_count: int) -> int:
-    """1 credit for standard posts, 2 for long-form (>2000 words)."""
-    return 2 if word_count > 2000 else 1
+    """1 credit for standard posts, 2 for long-form (>LONG_FORM_WORD_COUNT words)."""
+    return 2 if word_count > LONG_FORM_WORD_COUNT else 1
 
 
 # ---------------------------------------------------------------------------
@@ -131,55 +161,62 @@ def calculate_credits_for_post(word_count: int) -> int:
 async def reset_monthly_credits(db: AsyncSession) -> int:
     """Reset credits for all users whose ``last_reset_at`` is NULL or >30 days ago.
 
-    Determines ``plan_credits_monthly`` from the user's active subscription:
-    - No active subscription -> 5 (free tier)
-    - Pro  -> 50
-    - Business -> 9999
-
-    Creates a :class:`CreditTransaction` for each reset.
+    Processes in batches of 500 to avoid memory issues at scale.
     Returns the count of users reset.
     """
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-
-    result = await db.execute(
-        select(CreditBalance).where(
-            (CreditBalance.last_reset_at.is_(None))
-            | (CreditBalance.last_reset_at <= thirty_days_ago)
-        )
-    )
-    balances: list[CreditBalance] = list(result.scalars().all())
-
     reset_count = 0
-    for balance in balances:
-        # Determine plan allocation from active subscription
-        sub_result = await db.execute(
-            select(AutoBloggerSubscription).where(
-                AutoBloggerSubscription.user_id == balance.user_id,
-                AutoBloggerSubscription.status.in_(("active", "trialing")),
+    batch_size = 500
+    offset = 0
+
+    while True:
+        result = await db.execute(
+            select(CreditBalance).where(
+                (CreditBalance.last_reset_at.is_(None))
+                | (CreditBalance.last_reset_at <= thirty_days_ago)
+            ).limit(batch_size).offset(offset)
+        )
+        balances: list[CreditBalance] = list(result.scalars().all())
+
+        if not balances:
+            break
+
+        for balance in balances:
+            # Determine plan allocation from active subscription
+            sub_result = await db.execute(
+                select(AutoBloggerSubscription).where(
+                    AutoBloggerSubscription.user_id == balance.user_id,
+                    AutoBloggerSubscription.status.in_(("active", "trialing")),
+                )
             )
-        )
-        subscription = sub_result.scalar_one_or_none()
+            subscription = sub_result.scalar_one_or_none()
 
-        if subscription and subscription.plan in PLAN_CREDITS:
-            monthly_credits = PLAN_CREDITS[subscription.plan]
-        else:
-            monthly_credits = FREE_TIER_CREDITS
+            if subscription and subscription.plan in PLAN_CREDITS:
+                monthly_credits = PLAN_CREDITS[subscription.plan]
+            else:
+                monthly_credits = FREE_TIER_CREDITS
 
-        balance.plan_credits_monthly = monthly_credits
-        balance.credits_remaining = monthly_credits
-        balance.last_reset_at = datetime.now(timezone.utc)
+            balance.plan_credits_monthly = monthly_credits
+            balance.credits_remaining = monthly_credits
+            balance.last_reset_at = datetime.now(timezone.utc)
 
-        transaction = CreditTransaction(
-            id=str(uuid.uuid4()),
-            user_id=balance.user_id,
-            amount=monthly_credits,
-            balance_after=monthly_credits,
-            description=f"Monthly credit reset ({monthly_credits} credits)",
-        )
-        db.add(transaction)
-        reset_count += 1
+            transaction = CreditTransaction(
+                id=str(uuid.uuid4()),
+                user_id=balance.user_id,
+                amount=monthly_credits,
+                balance_after=monthly_credits,
+                description=f"Monthly credit reset ({monthly_credits} credits)",
+            )
+            db.add(transaction)
+            reset_count += 1
 
-    await db.flush()
+        await db.flush()
+        logger.info("Monthly credit reset: processed batch of %d (total: %d)", len(balances), reset_count)
+
+        if len(balances) < batch_size:
+            break
+        offset += batch_size
+
     return reset_count
 
 

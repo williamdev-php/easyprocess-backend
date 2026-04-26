@@ -31,13 +31,12 @@ _OAUTH_SCOPES = "blog:read+blog:write"
 
 
 class QvickoOAuthInitiateRequest(BaseModel):
-    source_name: str = "Qvicko"
+    pass
 
 
 class QvickoOAuthCallbackRequest(BaseModel):
     code: str
     state: str | None = None
-    source_name: str = "Qvicko"
 
 
 @router.post("/oauth/initiate")
@@ -54,7 +53,6 @@ async def initiate_qvicko_oauth(
         f"{_OAUTH_STATE_PREFIX}{state}",
         {
             "user_id": str(user.id),
-            "source_name": body.source_name,
         },
         ttl=_OAUTH_STATE_TTL,
     )
@@ -119,9 +117,7 @@ async def qvicko_oauth_callback(
     business_info = site_data.get("business_info", {})
     business_name = business_info.get("name", lead.business_name or "")
 
-    source_name = body.source_name
-    if source_name == "Qvicko":
-        source_name = f"Qvicko - {business_name}" if business_name else "Qvicko"
+    source_name = business_name if business_name else "Qvicko"
 
     # Create the source with encrypted OAuth token
     source = Source(

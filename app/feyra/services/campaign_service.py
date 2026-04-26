@@ -13,6 +13,7 @@ from app.feyra.models import (
     CampaignLeadStatus,
     CampaignStatus,
     CampaignStep,
+    ConnectionStatus,
     EmailAccount,
     Lead,
     LeadStatus,
@@ -48,10 +49,8 @@ async def create_campaign(
         name=data["name"],
         email_account_id=data["email_account_id"],
         status=CampaignStatus.DRAFT,
-        subject=data.get("subject"),
-        tone=data.get("tone"),
         daily_send_limit=data.get("daily_send_limit", 50),
-        timezone=data.get("timezone", "UTC"),
+        schedule_timezone=data.get("timezone", "UTC"),
     )
     db.add(campaign)
     await db.flush()
@@ -62,9 +61,8 @@ async def create_campaign(
             campaign_id=campaign.id,
             step_number=idx,
             delay_days=step_data.get("delay_days", 0 if idx == 1 else 3),
-            subject=step_data.get("subject"),
-            body_html=step_data.get("body_html", ""),
-            body_text=step_data.get("body_text", ""),
+            subject_template=step_data.get("subject"),
+            body_template=step_data.get("body_html", ""),
         )
         db.add(step)
 
@@ -126,7 +124,7 @@ async def launch_campaign(db: AsyncSession, campaign_id: str) -> None:
         select(EmailAccount).where(EmailAccount.id == campaign.email_account_id)
     )
     account = account_result.scalar_one_or_none()
-    if not account or account.connection_status != "connected":
+    if not account or account.connection_status != ConnectionStatus.CONNECTED:
         raise ValueError("Email account is not connected")
 
     # Activate
@@ -135,7 +133,7 @@ async def launch_campaign(db: AsyncSession, campaign_id: str) -> None:
         .where(Campaign.id == campaign_id)
         .values(
             status=CampaignStatus.ACTIVE,
-            started_at=datetime.now(timezone.utc),
+            send_start_date=datetime.now(timezone.utc),
         )
     )
 
@@ -332,25 +330,39 @@ async def process_campaign_queue(db: AsyncSession) -> None:
             lead_data = {
                 "first_name": lead.first_name or "",
                 "last_name": lead.last_name or "",
-                "company": lead.company or "",
+                "company": lead.company_name or "",
                 "job_title": lead.job_title or "",
                 "email": lead.email,
                 "phone": lead.phone or "",
-                "city": getattr(lead, "city", "") or "",
-                "country": getattr(lead, "country", "") or "",
-                "website": lead.website or "",
-                "industry": getattr(lead, "industry", "") or "",
+                "city": lead.location or "",
+                "country": lead.country or "",
+                "website": lead.website_url or "",
+                "industry": lead.industry or "",
             }
 
             # Personalize subject and body
-            subject = personalize_template(step.subject or campaign.subject or "", lead_data)
-            body_html = personalize_template(step.body_html or "", lead_data)
-            body_text = personalize_template(step.body_text or "", lead_data)
+            subject = personalize_template(step.subject_template or "", lead_data)
+            body_html = personalize_template(step.body_template or "", lead_data)
+            body_text = personalize_template(step.body_template or "", lead_data)
 
             # Determine reply-to and in-reply-to for follow-ups
             in_reply_to = None
-            if cl.current_step > 1 and cl.last_message_id:
-                in_reply_to = cl.last_message_id
+            if cl.current_step > 1:
+                # Look up the last sent email's message_id for threading
+                last_sent_result = await db.execute(
+                    select(SentEmail.message_id)
+                    .where(
+                        and_(
+                            SentEmail.campaign_lead_id == cl.id,
+                            SentEmail.status == SentEmailStatus.SENT,
+                        )
+                    )
+                    .order_by(SentEmail.sent_at.desc())
+                    .limit(1)
+                )
+                last_msg_id = last_sent_result.scalar_one_or_none()
+                if last_msg_id:
+                    in_reply_to = last_msg_id
 
             # Send the email
             message_id = await send_email_smtp(
@@ -362,9 +374,8 @@ async def process_campaign_queue(db: AsyncSession) -> None:
             sent_email = SentEmail(
                 campaign_id=cl.campaign_id,
                 campaign_lead_id=cl.id,
-                campaign_step_id=step.id,
                 email_account_id=account.id,
-                lead_id=lead.id,
+                step_number=step.step_number,
                 to_email=lead.email,
                 subject=subject,
                 body_html=body_html,
@@ -376,9 +387,7 @@ async def process_campaign_queue(db: AsyncSession) -> None:
             db.add(sent_email)
 
             # Update campaign lead
-            cl.last_message_id = message_id
             cl.last_sent_at = datetime.now(timezone.utc)
-            cl.emails_sent = (cl.emails_sent or 0) + 1
 
             # Check if there is a next step
             next_step_result = await db.execute(
@@ -441,8 +450,10 @@ async def detect_replies(db: AsyncSession, account_id: str) -> None:
     emails = await read_inbox_imap(account, folder="INBOX", since_date=since, limit=100)
 
     # Get sent message IDs for this account's campaigns
+    # Join with CampaignLead to get lead_id, since SentEmail doesn't store it directly
     sent_result = await db.execute(
-        select(SentEmail.message_id, SentEmail.campaign_lead_id, SentEmail.lead_id)
+        select(SentEmail.message_id, SentEmail.campaign_lead_id, CampaignLead.lead_id)
+        .join(CampaignLead, SentEmail.campaign_lead_id == CampaignLead.id)
         .where(SentEmail.email_account_id == account_id)
     )
     sent_map: dict[str, tuple[str, str]] = {}
@@ -560,9 +571,16 @@ async def handle_bounce(
 
         logger.info("Hard bounce for CampaignLead %s — stopped sending", campaign_lead_id)
     else:
-        # Soft bounce: increment counter
-        bounce_count = (cl.soft_bounce_count or 0) + 1
-        cl.soft_bounce_count = bounce_count
+        # Soft bounce: count previous bounces from SentEmail records
+        bounce_count_result = await db.execute(
+            select(func.count()).select_from(SentEmail).where(
+                and_(
+                    SentEmail.campaign_lead_id == campaign_lead_id,
+                    SentEmail.status == SentEmailStatus.BOUNCED,
+                )
+            )
+        )
+        bounce_count = (bounce_count_result.scalar() or 0) + 1
 
         if bounce_count >= 3:
             cl.status = CampaignLeadStatus.BOUNCED
@@ -643,7 +661,13 @@ async def get_campaign_analytics(db: AsyncSession, campaign_id: str) -> dict:
     # Emails sent per step
     step_result = await db.execute(
         select(CampaignStep.step_number, func.count(SentEmail.id))
-        .outerjoin(SentEmail, SentEmail.campaign_step_id == CampaignStep.id)
+        .outerjoin(
+            SentEmail,
+            and_(
+                SentEmail.campaign_id == CampaignStep.campaign_id,
+                SentEmail.step_number == CampaignStep.step_number,
+            ),
+        )
         .where(CampaignStep.campaign_id == campaign_id)
         .group_by(CampaignStep.step_number)
         .order_by(CampaignStep.step_number)

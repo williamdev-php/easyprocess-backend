@@ -239,17 +239,17 @@ async def send_email_smtp(
     reply_to: str | None = None,
 ) -> str:
     """Send an email via the account's SMTP settings. Returns Message-ID."""
-    password = decrypt_password(account.password_encrypted)
+    password = decrypt_password(account.smtp_password_encrypted)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         _send_email_sync,
         account.smtp_host,
         account.smtp_port,
-        account.email,
+        account.smtp_username or account.email_address,
         password,
         account.smtp_use_tls,
-        account.email,
+        account.email_address,
         to_email,
         subject,
         body_html,
@@ -356,14 +356,14 @@ async def read_inbox_imap(
     limit: int = 50,
 ) -> list[dict]:
     """Read emails from an IMAP folder. Returns a list of parsed email dicts."""
-    password = decrypt_password(account.password_encrypted)
+    password = decrypt_password(account.imap_password_encrypted)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         _read_inbox_sync,
         account.imap_host,
         account.imap_port,
-        account.email,
+        account.imap_username or account.email_address,
         password,
         account.imap_use_ssl,
         folder,
@@ -449,14 +449,14 @@ def _check_spam_sync(
 
 async def check_spam_folder(account: EmailAccount) -> list[dict]:
     """Check the spam/junk folder of the given email account."""
-    password = decrypt_password(account.password_encrypted)
+    password = decrypt_password(account.imap_password_encrypted)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         _check_spam_sync,
         account.imap_host,
         account.imap_port,
-        account.email,
+        account.imap_username or account.email_address,
         password,
         account.imap_use_ssl,
     )
@@ -501,14 +501,14 @@ def _move_from_spam_sync(
 
 async def move_email_from_spam(account: EmailAccount, message_id: str) -> bool:
     """Move an email from spam to inbox, identified by Message-ID header."""
-    password = decrypt_password(account.password_encrypted)
+    password = decrypt_password(account.imap_password_encrypted)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         _move_from_spam_sync,
         account.imap_host,
         account.imap_port,
-        account.email,
+        account.imap_username or account.email_address,
         password,
         account.imap_use_ssl,
         message_id,
@@ -535,13 +535,18 @@ async def check_connection_health(db: AsyncSession, account_id: str) -> bool:
         logger.warning("check_connection_health: account %s not found", account_id)
         return False
 
-    password = decrypt_password(account.password_encrypted)
+    imap_password = decrypt_password(account.imap_password_encrypted)
+    smtp_password = decrypt_password(account.smtp_password_encrypted)
 
     imap_ok, imap_msg = await test_imap_connection(
-        account.imap_host, account.imap_port, account.email, password, account.imap_use_ssl
+        account.imap_host, account.imap_port,
+        account.imap_username or account.email_address,
+        imap_password, account.imap_use_ssl,
     )
     smtp_ok, smtp_msg = await test_smtp_connection(
-        account.smtp_host, account.smtp_port, account.email, password, account.smtp_use_tls
+        account.smtp_host, account.smtp_port,
+        account.smtp_username or account.email_address,
+        smtp_password, account.smtp_use_tls,
     )
 
     both_ok = imap_ok and smtp_ok
@@ -560,14 +565,14 @@ async def check_connection_health(db: AsyncSession, account_id: str) -> bool:
         .where(EmailAccount.id == account_id)
         .values(
             connection_status=new_status,
-            last_error=error_message,
-            last_checked_at=datetime.now(timezone.utc),
+            connection_error_message=error_message,
+            last_connection_check_at=datetime.now(timezone.utc),
         )
     )
     await db.flush()
 
     logger.info(
         "Connection health for %s: %s (IMAP: %s, SMTP: %s)",
-        account.email, new_status.value, imap_msg, smtp_msg,
+        account.email_address, new_status.value, imap_msg, smtp_msg,
     )
     return both_ok

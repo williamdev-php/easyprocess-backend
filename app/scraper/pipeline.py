@@ -277,8 +277,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                         {k: v for k, v in css_colors.items()},
                     )
 
-            # --- Step 3: Generate site ---
-            lead.status = LeadStatus.GENERATING
+            # --- Step 2d: Planning ---
+            lead.status = LeadStatus.PLANNING
             await db.commit()
 
             # Look up industry prompt hint from DB if lead has an industry_id
@@ -293,6 +293,35 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 if ind:
                     _industry_hint = ind.prompt_hint
                     _industry_sections = ind.default_sections
+
+            blueprint = None
+            try:
+                from app.ai.planner import plan_site
+                scraped_summary = _build_scraped_summary(
+                    texts=data["texts"],
+                    services=data["texts"].get("services"),
+                    images=data["images"],
+                    crawl_report=data.get("crawl_report"),
+                )
+                blueprint = await plan_site(
+                    business_name=lead.business_name,
+                    context=None,
+                    industry=lead.industry,
+                    industry_hint=_industry_hint,
+                    num_images=len(data["images"]) if data["images"] else 0,
+                    colors=data["colors"],
+                    scraped_data_summary=scraped_summary,
+                )
+                if blueprint:
+                    lead.blueprint_data = blueprint.model_dump(mode="json")
+                    await db.commit()
+            except Exception as e:
+                logger.warning("Planner failed in pipeline, using fallback: %s", e)
+                blueprint = None
+
+            # --- Step 3: Generate site ---
+            lead.status = LeadStatus.GENERATING
+            await db.commit()
 
             gen_result = await generate_site(
                 business_name=lead.business_name,
@@ -312,6 +341,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 industry_prompt_hint=_industry_hint,
                 industry_default_sections=_industry_sections,
                 crawl_report=data.get("crawl_report"),
+                blueprint=blueprint,
             )
 
             # Inject favicon_url into generated site meta (AI may not include it)
@@ -329,6 +359,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                 site.output_tokens = gen_result.output_tokens
                 site.ai_model = gen_result.model
                 site.generation_cost_usd = gen_result.cost_usd
+                site.planner_tokens = getattr(blueprint, '_tokens_used', None) if blueprint else None
+                site.planner_cost_usd = getattr(blueprint, '_cost_usd', None) if blueprint else None
                 site.status = SiteStatus.DRAFT
                 site.updated_at = datetime.now(timezone.utc)
                 # Ensure subdomain is set (backfill if missing)
@@ -353,6 +385,8 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                     output_tokens=gen_result.output_tokens,
                     ai_model=gen_result.model,
                     generation_cost_usd=gen_result.cost_usd,
+                    planner_tokens=getattr(blueprint, '_tokens_used', None) if blueprint else None,
+                    planner_cost_usd=getattr(blueprint, '_cost_usd', None) if blueprint else None,
                     status=SiteStatus.DRAFT,
                     subdomain=subdomain,
                     claim_token=secrets.token_urlsafe(32),
@@ -385,6 +419,42 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.error_message = error_msg
             await db.commit()
         await cache.delete("admin:dashboard_stats")
+
+
+def _build_scraped_summary(
+    texts: dict | None,
+    services: list | None,
+    images: list | None,
+    crawl_report: dict | None,
+) -> str:
+    """Build a compact summary of scraped data for the planner."""
+    parts = []
+    if texts:
+        if texts.get("title"):
+            parts.append(f"Sidtitel: {texts['title']}")
+        if texts.get("about"):
+            parts.append(f"Om-text finns ({len(texts['about'])} tecken)")
+        if texts.get("headings"):
+            parts.append(f"Rubriker: {len(texts['headings'])} st")
+        if texts.get("paragraphs"):
+            parts.append(f"Textstycken: {len(texts['paragraphs'])} st")
+    if services:
+        parts.append(f"Tjänster: {len(services)} st")
+    if images:
+        parts.append(f"Bilder: {len(images)} st")
+    if crawl_report:
+        flags = []
+        if crawl_report.get("has_blog"):
+            flags.append("blogg")
+        if crawl_report.get("has_pricing"):
+            flags.append("priser")
+        if crawl_report.get("has_portfolio"):
+            flags.append("portfolio")
+        if crawl_report.get("has_booking"):
+            flags.append("bokning")
+        if flags:
+            parts.append(f"Hittade: {', '.join(flags)}")
+    return "\n".join(parts) if parts else "Ingen scrapad data tillgänglig."
 
 
 def _merge_subpage_content(data: dict, pages) -> None:

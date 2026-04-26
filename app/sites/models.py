@@ -31,6 +31,7 @@ class LeadStatus(str, enum.Enum):
     NEW = "NEW"
     SCRAPING = "SCRAPING"
     SCRAPED = "SCRAPED"
+    PLANNING = "PLANNING"
     GENERATING = "GENERATING"
     GENERATED = "GENERATED"
     EMAIL_SENT = "EMAIL_SENT"
@@ -139,6 +140,10 @@ class Lead(Base):
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Planner blueprint (Fas 5.2)
+    blueprint_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    use_planner: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
     scraped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
@@ -244,6 +249,10 @@ class GeneratedSite(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
     generation_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Planner cost tracking (Fas 6.2)
+    planner_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    planner_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
 
     # Before/after video URL
     video_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

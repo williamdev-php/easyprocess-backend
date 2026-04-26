@@ -456,6 +456,19 @@ class EmailAccount(FeyraBase):
     )
     connection_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Aliases used by services (password_encrypted, email, last_error, last_checked_at)
+    password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Warmup status on the account itself (used by warmup_service)
+    warmup_status: Mapped[WarmupStatus | None] = mapped_column(
+        Enum(WarmupStatus, schema="feyra", name="warmupstatus", create_constraint=False),
+        nullable=True,
+    )
+
     # Sending & warmup
     daily_send_limit: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     warmup_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -477,6 +490,11 @@ class EmailAccount(FeyraBase):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+    @property
+    def email(self) -> str:
+        """Alias for email_address, used by services."""
+        return self.email_address
 
     __table_args__ = (
         Index("idx_fea_user_id", "user_id"),
@@ -517,6 +535,14 @@ class WarmupSettings(FeyraBase):
     current_day: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[WarmupStatus] = mapped_column(
         Enum(WarmupStatus, schema="feyra"), default=WarmupStatus.IDLE, nullable=False
+    )
+
+    # Fields used by warmup_service.calculate_daily_volume
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    max_daily_volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ramp_up_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -567,6 +593,18 @@ class WarmupEmail(FeyraBase):
     landed_in_spam: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     rescued_from_spam: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Alias columns used by warmup_service (sender_account_id / receiver_account_id)
+    sender_account_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(f"{FEYRA_SCHEMA}.email_accounts.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    receiver_account_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(f"{FEYRA_SCHEMA}.email_accounts.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -577,6 +615,7 @@ class WarmupEmail(FeyraBase):
     __table_args__ = (
         Index("idx_fwe_from_account_id", "from_account_id"),
         Index("idx_fwe_to_account_id", "to_account_id"),
+        Index("idx_fwe_sender_account_id", "sender_account_id"),
         Index("idx_fwe_status", "status"),
         Index("idx_fwe_created_at", "created_at"),
         {"schema": FEYRA_SCHEMA},
@@ -619,6 +658,18 @@ class Lead(FeyraBase):
         Enum(EmailVerificationStatus, schema="feyra"), default=EmailVerificationStatus.PENDING, nullable=False
     )
     lead_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Alias fields used by services (company -> company_name, website -> website_url)
+    company: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # FK back to crawl job that discovered this lead
+    crawl_job_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(f"{FEYRA_SCHEMA}.crawl_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     source: Mapped[LeadSource] = mapped_column(
         Enum(LeadSource, schema="feyra"), default=LeadSource.MANUAL, nullable=False
@@ -667,6 +718,7 @@ class CrawlJob(FeyraBase):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
+    target_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     seed_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
     target_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
     max_pages: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
@@ -725,6 +777,8 @@ class CrawlResult(FeyraBase):
     emails_found: Mapped[list | None] = mapped_column(JSON, nullable=True)
     contacts_extracted: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    contacts_found: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     status: Mapped[CrawlResultStatus] = mapped_column(
         Enum(CrawlResultStatus, schema="feyra"), default=CrawlResultStatus.PENDING, nullable=False
     )
@@ -758,6 +812,14 @@ class Campaign(FeyraBase):
         String(36),
         ForeignKey(f"{FEYRA_SCHEMA}.email_accounts.id", ondelete="CASCADE"),
         nullable=False,
+    )
+
+    # Fields used by campaign_service
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    tone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     status: Mapped[CampaignStatus] = mapped_column(
@@ -829,6 +891,11 @@ class CampaignStep(FeyraBase):
     subject_template: Mapped[str | None] = mapped_column(String(500), nullable=True)
     body_template: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Fields used by campaign_service (in addition to templates above)
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     ai_rewrite_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ai_tone: Mapped[AITone | None] = mapped_column(
         Enum(AITone, schema="feyra"), default=AITone.PROFESSIONAL, nullable=True
@@ -873,6 +940,11 @@ class CampaignLead(FeyraBase):
         Enum(CampaignLeadStatus, schema="feyra"), default=CampaignLeadStatus.PENDING, nullable=False
     )
 
+    # Fields used by campaign_service for tracking
+    last_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    emails_sent: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    soft_bounce_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+
     next_send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -907,10 +979,20 @@ class SentEmail(FeyraBase):
         ForeignKey(f"{FEYRA_SCHEMA}.campaign_leads.id", ondelete="CASCADE"),
         nullable=False,
     )
+    campaign_step_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(f"{FEYRA_SCHEMA}.campaign_steps.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     email_account_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey(f"{FEYRA_SCHEMA}.email_accounts.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    lead_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(f"{FEYRA_SCHEMA}.leads.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     step_number: Mapped[int] = mapped_column(Integer, nullable=False)

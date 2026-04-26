@@ -465,9 +465,9 @@ async def create_site_direct(
     # Build context texts for the AI prompt
     texts: dict = {
         "title": payload.business_name,
-        "description": payload.context or "",
-        "about": payload.context or "",
-        "paragraphs": [payload.context] if payload.context else [],
+        "description": "",
+        "about": "",
+        "paragraphs": [],
         "headings": [],
     }
 
@@ -522,6 +522,31 @@ async def create_site_direct(
                     if not stored_images:
                         stored_images = None
 
+                # --- Planning step ---
+                blueprint = None
+                try:
+                    from app.ai.planner import plan_site
+                    blueprint = await plan_site(
+                        business_name=payload.business_name,
+                        context=payload.context,
+                        industry=industry_name,
+                        industry_hint=industry_prompt_hint,
+                        num_images=len(stored_images) if stored_images else 0,
+                        colors=colors,
+                    )
+                    # Save blueprint for debugging
+                    if blueprint:
+                        result = await bg_db.execute(
+                            select(Lead).where(Lead.id == lead_id)
+                        )
+                        bg_lead = result.scalar_one_or_none()
+                        if bg_lead:
+                            bg_lead.blueprint_data = blueprint.model_dump(mode="json")
+                            await bg_db.commit()
+                except Exception as e:
+                    logger.warning("Planner failed, using fallback: %s", e)
+                    blueprint = None
+
                 gen_result = await generate_site(
                     business_name=payload.business_name,
                     industry=industry_name,
@@ -538,6 +563,9 @@ async def create_site_direct(
                     visual_analysis=None,
                     industry_prompt_hint=industry_prompt_hint,
                     industry_default_sections=industry_default_sections,
+                    blueprint=blueprint,
+                    context=payload.context,
+                    is_freeform=True,
                 )
 
                 site_data = gen_result.site_schema.model_dump(mode="json")
@@ -567,6 +595,8 @@ async def create_site_direct(
                     output_tokens=gen_result.output_tokens,
                     ai_model=gen_result.model,
                     generation_cost_usd=gen_result.cost_usd,
+                    planner_tokens=getattr(blueprint, '_tokens_used', None) if blueprint else None,
+                    planner_cost_usd=getattr(blueprint, '_cost_usd', None) if blueprint else None,
                     status=SiteStatus.DRAFT,
                     subdomain=subdomain,
                     claim_token=secrets.token_urlsafe(32),

@@ -120,7 +120,14 @@ class BusinessInfo(BaseModel):
     phone: str | None = None
     address: str | None = None
     org_number: str | None = None
-    social_links: dict[str, str] = {}
+    social_links: dict[str, str] | list = {}
+
+    @field_validator("social_links", mode="before")
+    @classmethod
+    def _coerce_social_links(cls, v):
+        if isinstance(v, list):
+            return {}
+        return v
     opening_hours_enabled: bool = False
     opening_hours: list[OpeningHoursDay] = []
 
@@ -540,6 +547,29 @@ class RankingData(BaseModel):
     items: list[RankingItem] = []
 
 
+class QuizOption(BaseModel):
+    label: str
+    next: int | None = None  # jump to step index; None = next step
+
+class QuizStep(BaseModel):
+    question: str
+    options: list[QuizOption] = []
+    image: str | None = None
+
+class QuizResult(BaseModel):
+    title: str
+    description: str = ""
+    cta: CTAButton | None = None
+
+class QuizData(BaseModel):
+    """Interactive quiz section. Score-based or branching."""
+    title: str = ""
+    subtitle: str = ""
+    steps: list[QuizStep] = []
+    results: list[QuizResult] = []
+    result_logic: str = "score"  # "score" | "first_match"
+
+
 class PageContentData(BaseModel):
     """Rich-text content section for custom pages.
 
@@ -642,7 +672,7 @@ class SiteSchema(BaseModel):
             "hero", "about", "features", "stats", "services", "process",
             "gallery", "team", "testimonials", "faq", "cta", "contact",
             "pricing", "video", "logo_cloud", "custom_content", "banner",
-            "ranking",
+            "ranking", "quiz",
         ]
     )
 
@@ -682,6 +712,7 @@ class SiteSchema(BaseModel):
     custom_content: CustomContentData | None = None
     banner: BannerData | None = None
     ranking: RankingData | None = None
+    quiz: QuizData | None = None
     page_content: PageContentData | None = None
 
     # Duplicated sections — allows multiple instances of the same section type.

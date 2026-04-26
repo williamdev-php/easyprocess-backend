@@ -78,15 +78,16 @@ def encrypt_platform_config(config: dict[str, Any] | None) -> dict[str, Any] | N
     result = copy.deepcopy(config)
     for key in _SENSITIVE_KEYS:
         if key in result and result[key] and isinstance(result[key], str):
-            # Skip if already encrypted (starts with 'gAAAAA' which is Fernet's prefix after b64)
-            if not result[key].startswith("gAAAAA"):
-                result[key] = encrypt_value(result[key])
+            # Skip if already encrypted (Fernet prefix or our ENC: prefix)
+            if not result[key].startswith("gAAAAA") and not result[key].startswith("ENC:"):
+                result[key] = "ENC:" + encrypt_value(result[key])
     return result
 
 
 def decrypt_platform_config(config: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return a copy of platform_config with sensitive fields decrypted.
 
+    Supports both legacy (gAAAAA prefix) and new (ENC: prefix) encrypted values.
     Gracefully handles plaintext values (not yet encrypted) by returning them as-is.
     """
     if not config:
@@ -95,12 +96,13 @@ def decrypt_platform_config(config: dict[str, Any] | None) -> dict[str, Any] | N
     result = copy.deepcopy(config)
     for key in _SENSITIVE_KEYS:
         if key in result and result[key] and isinstance(result[key], str):
-            # Only attempt decryption if the value looks like it was encrypted
-            if result[key].startswith("gAAAAA"):
-                try:
+            try:
+                if result[key].startswith("ENC:"):
+                    result[key] = decrypt_value(result[key][4:])
+                elif result[key].startswith("gAAAAA"):
                     result[key] = decrypt_value(result[key])
-                except ValueError:
-                    logger.warning(
-                        "Failed to decrypt platform_config.%s -- returning as-is", key
-                    )
+            except ValueError:
+                logger.warning(
+                    "Failed to decrypt platform_config.%s -- returning as-is", key
+                )
     return result

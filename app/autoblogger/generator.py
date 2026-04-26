@@ -123,6 +123,7 @@ class BlogGenerationResult:
     output_tokens: int
     cost_usd: float
     generation_prompt: str  # the prompt sent to Claude
+    ai_summary: str  # Short summary of the post for future deduplication context
 
 
 # --- Prompt templates --------------------------------------------------------
@@ -142,6 +143,8 @@ Target keywords: {keywords}
 Language: {language}
 Target word count: approximately {word_count_target} words
 {brand_voice_section}
+{training_section}
+{dedup_section}
 {title_section}
 {internal_links_section}
 
@@ -149,7 +152,7 @@ REQUIREMENTS:
 - Write the blog content as HTML using semantic tags: <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. Do NOT include <h1> (the title is rendered separately).
 - The content should be well-structured with clear headings, subheadings, and paragraphs.
 - Naturally incorporate the target keywords without keyword stuffing.
-- Write in the specified language ({language}).
+- Write in the language specified above.
 - Make the content engaging, informative, and valuable to readers.
 
 Return a JSON object with exactly these keys:
@@ -162,7 +165,8 @@ Return a JSON object with exactly these keys:
   "meta_description": "SEO meta description (max 160 characters, compelling with keyword)",
   "tags": ["tag1", "tag2", "tag3"],
   "schema_markup": {{ "JSON-LD Article schema object with @context, @type, headline, description, author, datePublished (use today's date placeholder YYYY-MM-DD)" }},
-  "internal_links": [ {{ "anchor": "anchor text", "suggested_topic": "related post topic" }} ]
+  "internal_links": [ {{ "anchor": "anchor text", "suggested_topic": "related post topic" }} ],
+  "ai_summary": "A 1-2 sentence summary of what this post covers, for content planning purposes"
 }}
 
 IMPORTANT:
@@ -181,6 +185,8 @@ def _build_prompt(
     word_count_target: int,
     title: str | None,
     existing_posts: list[str] | None,
+    training_context: dict | None = None,
+    recent_summaries: list[str] | None = None,
 ) -> str:
     """Build the user prompt from parameters."""
     keywords_str = ", ".join(keywords) if keywords else topic
@@ -190,8 +196,42 @@ def _build_prompt(
     else:
         brand_voice_section = ""
 
+    if training_context:
+        parts = []
+        if training_context.get("brand_name"):
+            parts.append(f"Brand: {training_context['brand_name']}")
+        if training_context.get("brand_description"):
+            parts.append(f"About the brand: {training_context['brand_description']}")
+        if training_context.get("tone_style"):
+            parts.append(f"Writing tone & style: {training_context['tone_style']}")
+        if training_context.get("target_audience"):
+            parts.append(f"Target audience: {training_context['target_audience']}")
+        if training_context.get("writing_guidelines"):
+            parts.append(f"Writing guidelines: {training_context['writing_guidelines']}")
+        if training_context.get("ai_generated_guidelines"):
+            parts.append(f"Style guide (learned from existing content): {training_context['ai_generated_guidelines']}")
+        if training_context.get("example_posts"):
+            examples = training_context["example_posts"][:3]
+            example_texts = []
+            for ex in examples:
+                example_texts.append(f"  Title: {ex.get('title', 'N/A')}\n  Style sample: {ex.get('content_snippet', ex.get('excerpt', 'N/A'))}")
+            parts.append("Example posts to match style:\n" + "\n---\n".join(example_texts))
+        training_section = "BRAND TRAINING CONTEXT:\n" + "\n".join(parts)
+    else:
+        training_section = ""
+
+    if recent_summaries:
+        summaries_text = "\n".join(f"- {s}" for s in recent_summaries[:20])
+        dedup_section = (
+            "IMPORTANT — The following blog posts have already been written. "
+            "Do NOT create content that duplicates or closely overlaps with these topics:\n"
+            + summaries_text
+        )
+    else:
+        dedup_section = ""
+
     if title:
-        title_section = f'Use this exact title: "{title}"'
+        title_section = f'Title (use exactly): "{title}"'
     else:
         title_section = "Generate a compelling, keyword-rich title."
 
@@ -210,6 +250,8 @@ def _build_prompt(
         language=language,
         word_count_target=word_count_target,
         brand_voice_section=brand_voice_section,
+        training_section=training_section,
+        dedup_section=dedup_section,
         title_section=title_section,
         internal_links_section=internal_links_section,
     )
@@ -246,6 +288,8 @@ async def generate_blog_post(
     ai_model: str = "claude-sonnet-4-20250514",
     title: str | None = None,
     existing_posts: list[str] | None = None,
+    training_context: dict | None = None,
+    recent_summaries: list[str] | None = None,
 ) -> BlogGenerationResult:
     """Generate a complete blog post with SEO metadata using Claude.
 
@@ -258,6 +302,8 @@ async def generate_blog_post(
         ai_model: The Claude model to use.
         title: Optional pre-set title (Claude will use it as-is).
         existing_posts: Titles of existing posts for internal linking suggestions.
+        training_context: Optional training profile data for brand consistency.
+        recent_summaries: Optional summaries of recent posts for deduplication.
 
     Returns:
         BlogGenerationResult with all generated content and metadata.
@@ -270,11 +316,13 @@ async def generate_blog_post(
         word_count_target=word_count_target,
         title=title,
         existing_posts=existing_posts,
+        training_context=training_context,
+        recent_summaries=recent_summaries,
     )
 
     payload = {
         "model": ai_model,
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "system": _SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.7,
@@ -324,6 +372,7 @@ async def generate_blog_post(
     tags = result.get("tags", [])
     schema_markup = result.get("schema_markup", {})
     internal_links = result.get("internal_links", [])
+    ai_summary = result.get("ai_summary", excerpt[:200] if excerpt else "")
 
     if not isinstance(tags, list):
         tags = []
@@ -368,4 +417,5 @@ async def generate_blog_post(
         output_tokens=output_tokens,
         cost_usd=round(cost, 6),
         generation_prompt=user_prompt,
+        ai_summary=ai_summary,
     )

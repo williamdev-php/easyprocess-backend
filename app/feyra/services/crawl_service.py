@@ -444,8 +444,12 @@ async def start_crawl(db: AsyncSession, crawl_job_id: str) -> None:
     # Seed URLs from the job config
     if job.seed_urls:
         to_visit.extend(job.seed_urls)
-    elif job.target_url:
-        to_visit.append(job.target_url)
+    elif job.target_domains:
+        # Use target domains as seed if no seed_urls provided
+        for domain in job.target_domains:
+            if not domain.startswith("http"):
+                domain = f"https://{domain}"
+            to_visit.append(domain)
 
     total_contacts = 0
 
@@ -474,7 +478,9 @@ async def start_crawl(db: AsyncSession, crawl_job_id: str) -> None:
                     url=url,
                     status=CrawlResultStatus.SCRAPED if not page_data["error"] else CrawlResultStatus.ERROR,
                     page_title=page_data.get("title", ""),
+                    http_status_code=page_data.get("status_code"),
                     error_message=page_data.get("error"),
+                    crawled_at=datetime.now(timezone.utc),
                 )
                 db.add(crawl_result)
                 await db.flush()
@@ -507,10 +513,10 @@ async def start_crawl(db: AsyncSession, crawl_job_id: str) -> None:
                         job_title=contact.get("title"),
                         phone=contact.get("phone"),
                         linkedin_url=contact.get("linkedin_url"),
-                        website=url,
+                        website_url=url,
+                        source_url=url,
                         source=LeadSource.CRAWL,
                         status=LeadStatus.NEW,
-                        crawl_job_id=crawl_job_id,
                     )
                     db.add(lead)
                     total_contacts += 1
@@ -521,8 +527,8 @@ async def start_crawl(db: AsyncSession, crawl_job_id: str) -> None:
                     .where(CrawlResult.id == crawl_result.id)
                     .values(
                         status=CrawlResultStatus.PROCESSED,
-                        emails_found=len(emails),
-                        contacts_found=len(contacts),
+                        emails_found=emails,
+                        contacts_extracted=[c["email"] for c in contacts],
                     )
                 )
                 await db.flush()
@@ -539,6 +545,7 @@ async def start_crawl(db: AsyncSession, crawl_job_id: str) -> None:
                     .values(
                         pages_crawled=len(visited),
                         leads_found=total_contacts,
+                        emails_found=CrawlJob.emails_found + len(emails),
                     )
                 )
                 await db.flush()
@@ -637,13 +644,25 @@ async def import_leads_from_csv(
                 "status": LeadStatus.NEW,
             }
 
+            # Map user-facing field names to actual model field names
+            _csv_field_to_model = {
+                "company": "company_name",
+                "website": "website_url",
+                "city": "location",
+            }
             optional_fields = [
-                "first_name", "last_name", "company", "job_title",
-                "phone", "linkedin_url", "website", "city", "country",
+                "first_name", "last_name", "company_name", "job_title",
+                "phone", "linkedin_url", "website_url", "location", "country",
                 "industry",
             ]
             for field in optional_fields:
                 csv_col = field_map.get(field)
+                if not csv_col:
+                    # Also check the user-facing alias (e.g. "company" -> "company_name")
+                    for alias, model_field in _csv_field_to_model.items():
+                        if model_field == field:
+                            csv_col = field_map.get(alias)
+                            break
                 if csv_col and row.get(csv_col):
                     lead_kwargs[field] = row[csv_col].strip()
 

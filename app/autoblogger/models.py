@@ -147,10 +147,10 @@ class AutoBloggerUser(AutoBloggerBase):
 
     # Relationships
     sessions: Mapped[list["AutoBloggerSession"]] = relationship(
-        "AutoBloggerSession", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "AutoBloggerSession", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
     social_accounts: Mapped[list["AutoBloggerSocialAccount"]] = relationship(
-        "AutoBloggerSocialAccount", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "AutoBloggerSocialAccount", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
 
     __table_args__ = (
@@ -187,7 +187,7 @@ class AutoBloggerSession(AutoBloggerBase):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    user: Mapped[AutoBloggerUser] = relationship("AutoBloggerUser", back_populates="sessions", lazy="selectin")
+    user: Mapped[AutoBloggerUser] = relationship("AutoBloggerUser", back_populates="sessions", lazy="select")
 
     __table_args__ = (
         Index("idx_ab_sessions_user_id", "user_id"),
@@ -249,7 +249,7 @@ class AutoBloggerSocialAccount(AutoBloggerBase):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    user: Mapped[AutoBloggerUser] = relationship("AutoBloggerUser", back_populates="social_accounts", lazy="selectin")
+    user: Mapped[AutoBloggerUser] = relationship("AutoBloggerUser", back_populates="social_accounts", lazy="select")
 
     __table_args__ = (
         Index("idx_ab_social_provider_uid", "provider", "provider_user_id", unique=True),
@@ -343,14 +343,15 @@ class Source(AutoBloggerBase):
     )
 
     posts: Mapped[list["BlogPostAB"]] = relationship(
-        "BlogPostAB", back_populates="source", cascade="all, delete-orphan", lazy="selectin"
+        "BlogPostAB", back_populates="source", cascade="all, delete-orphan", lazy="select"
     )
     schedules: Mapped[list["ContentSchedule"]] = relationship(
-        "ContentSchedule", back_populates="source", cascade="all, delete-orphan", lazy="selectin"
+        "ContentSchedule", back_populates="source", cascade="all, delete-orphan", lazy="select"
     )
 
     __table_args__ = (
         Index("idx_src_user_id", "user_id"),
+        Index("idx_src_user_active", "user_id", "is_active"),
         {"schema": AUTOBLOGGER_SCHEMA},
     )
 
@@ -395,6 +396,7 @@ class BlogPostAB(AutoBloggerBase):
     ai_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     generation_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # New fields
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -418,6 +420,8 @@ class BlogPostAB(AutoBloggerBase):
         Index("idx_abp_user_id", "user_id"),
         Index("idx_abp_status", "status"),
         Index("idx_abp_scheduled_at", "scheduled_at"),
+        Index("idx_abp_user_status", "user_id", "status"),
+        Index("idx_abp_user_created", "user_id", "created_at"),
         {"schema": AUTOBLOGGER_SCHEMA},
     )
 
@@ -467,6 +471,8 @@ class ContentSchedule(AutoBloggerBase):
     __table_args__ = (
         Index("idx_cs_source_id", "source_id"),
         Index("idx_cs_next_run", "next_run_at"),
+        Index("idx_cs_user_active", "user_id", "is_active"),
+        Index("idx_cs_active_next_run", "is_active", "next_run_at"),
         {"schema": AUTOBLOGGER_SCHEMA},
     )
 
@@ -487,6 +493,40 @@ class UserSettings(AutoBloggerBase):
     brand_voice_global: Mapped[str | None] = mapped_column(Text, nullable=True)
     posts_per_month_limit: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     notification_email: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        {"schema": AUTOBLOGGER_SCHEMA},
+    )
+
+
+class TrainingProfile(AutoBloggerBase):
+    """Training profile for AI blog generation — teaches the AI brand voice and style."""
+    __tablename__ = "training_profiles"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True)
+
+    brand_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brand_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tone_style: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    writing_guidelines: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brand_images: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    example_posts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    ai_generated_guidelines: Mapped[str | None] = mapped_column(Text, nullable=True)
+    imported_post_summaries: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
@@ -660,10 +700,12 @@ class CreditTransaction(AutoBloggerBase):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    post: Mapped["BlogPostAB | None"] = relationship("BlogPostAB", lazy="selectin")
+    post: Mapped["BlogPostAB | None"] = relationship("BlogPostAB", lazy="select")
 
     __table_args__ = (
         Index("idx_ct_user_id", "user_id"),
         Index("idx_ct_created_at", "created_at"),
+        Index("idx_ct_user_created", "user_id", "created_at"),
+        Index("idx_ct_post_id", "post_id"),
         {"schema": AUTOBLOGGER_SCHEMA},
     )

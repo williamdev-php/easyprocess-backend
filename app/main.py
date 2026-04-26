@@ -11,6 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.autoblogger.exceptions import AutoBloggerError, autoblogger_exception_handler
+from app.autoblogger.middleware import RequestIDMiddleware
 
 from sqlalchemy import text
 
@@ -373,62 +374,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     schedule_worker_task = asyncio.create_task(_schedule_execution_loop())
 
-    # AutoBlogger: stuck generation recovery (every 5 minutes)
+    # AutoBlogger: stuck generation recovery + cleanup (every 5 minutes)
     async def _ab_stuck_recovery_loop():
-        from app.autoblogger.models import BlogPostAB, PostStatus, ContentSchedule
-        from app.autoblogger.scheduler import calculate_next_run_at
-        from sqlalchemy import select, and_
+        from app.autoblogger.cleanup import run_all_cleanup
 
         await asyncio.sleep(300)  # Initial delay: 5 min
         while True:
             try:
-                threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
-                schedule_threshold = datetime.now(timezone.utc) - timedelta(hours=1)
-
                 async with get_db_session() as db:
-                    # Posts stuck in GENERATING > 10 min
-                    result = await db.execute(
-                        select(BlogPostAB).where(
-                            and_(
-                                BlogPostAB.status == PostStatus.GENERATING,
-                                BlogPostAB.updated_at < threshold,
-                            )
-                        )
-                    )
-                    stuck_posts = result.scalars().all()
-                    if stuck_posts:
-                        for post in stuck_posts:
-                            post.status = PostStatus.FAILED
-                            post.error_message = "Generation timed out (stuck recovery)"
-                            post.updated_at = datetime.now(timezone.utc)
-                            logger.warning("AutoBlogger: recovered stuck post %s", post.id)
-                        logger.info("AutoBlogger: recovered %d stuck posts", len(stuck_posts))
-
-                    # Schedules with next_run_at > 1 hour in the past
-                    result = await db.execute(
-                        select(ContentSchedule).where(
-                            and_(
-                                ContentSchedule.is_active.is_(True),
-                                ContentSchedule.next_run_at.isnot(None),
-                                ContentSchedule.next_run_at < schedule_threshold,
-                            )
-                        )
-                    )
-                    stale_schedules = result.scalars().all()
-                    if stale_schedules:
-                        for sched in stale_schedules:
-                            sched.next_run_at = calculate_next_run_at(
-                                frequency=sched.frequency,
-                                preferred_time=sched.preferred_time,
-                                timezone_str=sched.timezone,
-                                days_of_week=sched.days_of_week,
-                                last_run_at=sched.last_run_at,
-                            )
-                            sched.updated_at = datetime.now(timezone.utc)
-                            logger.warning("AutoBlogger: recalculated next_run_at for schedule %s", sched.id)
-                        logger.info("AutoBlogger: fixed %d stale schedules", len(stale_schedules))
-
-                    await db.flush()
+                    summary = await run_all_cleanup(db)
+                    if any(summary.values()):
+                        logger.info("AutoBlogger cleanup: %s", summary)
             except Exception:
                 logger.exception("AutoBlogger stuck recovery failed")
             await asyncio.sleep(300)  # Every 5 minutes
@@ -490,6 +446,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_exception_handler(AutoBloggerError, autoblogger_exception_handler)
 app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 
 # Request logging middleware — log AutoBlogger API requests with response times
@@ -532,6 +489,7 @@ from app.autoblogger.analytics import router as autoblogger_analytics_router  # 
 from app.autoblogger.health import router as autoblogger_health_router  # noqa: E402
 from app.oauth.router import router as oauth_router  # noqa: E402
 from app.oauth.blog_api import router as oauth_blog_router  # noqa: E402
+from app.newsletter.router import router as newsletter_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -555,6 +513,7 @@ app.include_router(oauth_router)
 app.include_router(oauth_blog_router)
 app.include_router(feyra_router)
 app.include_router(feyra_api_router)
+app.include_router(newsletter_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

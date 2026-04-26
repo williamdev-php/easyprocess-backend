@@ -20,6 +20,7 @@ from app.feyra.models import (
     WarmupStatus,
     WarmupEmailDirection,
     WarmupEmailStatus,
+    EmailVerificationStatus,
     LeadSource,
     LeadStatus,
     CrawlType,
@@ -29,6 +30,7 @@ from app.feyra.models import (
     SentEmailStatus,
     AIModelPreference,
 )
+from app.feyra.encryption import encrypt_password, decrypt_password
 from app.database import get_db
 from app.rate_limit import limiter
 
@@ -193,12 +195,12 @@ async def create_email_account(
         imap_host=imap_host,
         imap_port=imap_port or 993,
         imap_username=body.imap_username or body.email_address,
-        imap_password_encrypted=body.imap_password or "",
+        imap_password_encrypted=encrypt_password(body.imap_password) if body.imap_password else None,
         imap_use_ssl=body.imap_use_ssl,
         smtp_host=smtp_host,
         smtp_port=smtp_port or 587,
         smtp_username=body.smtp_username or body.email_address,
-        smtp_password_encrypted=body.smtp_password or "",
+        smtp_password_encrypted=encrypt_password(body.smtp_password) if body.smtp_password else None,
         smtp_use_tls=body.smtp_use_tls,
         connection_status=ConnectionStatus.PENDING,
         created_at=_now(),
@@ -317,10 +319,12 @@ async def update_email_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email account not found")
 
     updates = body.model_dump(exclude_unset=True)
-    # Map schema field names to model field names
+    # Map schema field names to model field names and encrypt passwords
     field_map = {"imap_password": "imap_password_encrypted", "smtp_password": "smtp_password_encrypted"}
     for field, value in updates.items():
         model_field = field_map.get(field, field)
+        if field in ("imap_password", "smtp_password") and value:
+            value = encrypt_password(value)
         setattr(account, model_field, value)
     account.updated_at = _now()
 
@@ -383,11 +387,12 @@ async def test_email_account(
     # Test IMAP
     try:
         import imaplib
+        imap_password = decrypt_password(account.imap_password_encrypted) if account.imap_password_encrypted else ""
         if account.imap_use_ssl:
             imap = imaplib.IMAP4_SSL(account.imap_host, account.imap_port)
         else:
             imap = imaplib.IMAP4(account.imap_host, account.imap_port)
-        imap.login(account.imap_username, account.imap_password_encrypted)
+        imap.login(account.imap_username, imap_password)
         imap.logout()
         imap_ok = True
         imap_message = "Connection successful"
@@ -397,12 +402,13 @@ async def test_email_account(
     # Test SMTP
     try:
         import smtplib
+        smtp_password = decrypt_password(account.smtp_password_encrypted) if account.smtp_password_encrypted else ""
         if account.smtp_use_tls:
             smtp = smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=10)
             smtp.starttls()
         else:
             smtp = smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=10)
-        smtp.login(account.smtp_username, account.smtp_password_encrypted)
+        smtp.login(account.smtp_username, smtp_password)
         smtp.quit()
         smtp_ok = True
         smtp_message = "Connection successful"
@@ -830,9 +836,9 @@ async def list_leads(
     query = select(FeyraLead).where(FeyraLead.user_id == str(current_user.id))
 
     if status_filter:
-        query = query.where(FeyraLead.status == status_filter)
+        query = query.where(FeyraLead.status == LeadStatus(status_filter))
     if source:
-        query = query.where(FeyraLead.source == source)
+        query = query.where(FeyraLead.source == LeadSource(source))
     if tag:
         query = query.where(FeyraLead.tags.contains([tag]))
     if search:
@@ -1116,7 +1122,7 @@ async def export_leads(
 
     query = select(FeyraLead).where(FeyraLead.user_id == str(current_user.id))
     if status_filter:
-        query = query.where(FeyraLead.status == status_filter)
+        query = query.where(FeyraLead.status == LeadStatus(status_filter))
     if tag:
         query = query.where(FeyraLead.tags.contains([tag]))
 
@@ -1137,8 +1143,8 @@ async def export_leads(
             lead.website_url or "",
             lead.linkedin_url or "",
             lead.location or "",
-            lead.status or "",
-            lead.source or "",
+            lead.status.value if lead.status else "",
+            lead.source.value if lead.source else "",
             lead.lead_score or "",
             ",".join(lead.tags) if lead.tags else "",
         ])
@@ -1200,13 +1206,13 @@ async def bulk_action_leads(
         new_status = body.params.get("status")
         if not new_status:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing 'status' in params")
+        new_lead_status = LeadStatus(new_status)
         for lead in leads:
-            lead.status = new_status
+            lead.status = new_lead_status
             lead.updated_at = _now()
             affected += 1
 
     elif body.action == "verify":
-        from app.feyra.models import EmailVerificationStatus
         for lead in leads:
             lead.email_verified = True
             lead.email_verification_status = EmailVerificationStatus.VALID
@@ -1244,7 +1250,6 @@ async def verify_lead_email(
 
     # Basic email verification (DNS MX check would go here in production)
     # For now, mark as verified
-    from app.feyra.models import EmailVerificationStatus
     lead.email_verified = True
     lead.email_verification_status = EmailVerificationStatus.VALID
     lead.updated_at = _now()
@@ -1304,7 +1309,7 @@ async def list_crawl_jobs(
 
     query = select(FeyraCrawlJob).where(FeyraCrawlJob.user_id == str(current_user.id))
     if status_filter:
-        query = query.where(FeyraCrawlJob.status == status_filter)
+        query = query.where(FeyraCrawlJob.status == CrawlJobStatus(status_filter))
 
     result = await db.execute(query.order_by(FeyraCrawlJob.created_at.desc()))
     jobs = result.scalars().all()
@@ -1543,7 +1548,7 @@ async def list_campaigns(
 
     query = select(FeyraCampaign).where(FeyraCampaign.user_id == str(current_user.id))
     if status_filter:
-        query = query.where(FeyraCampaign.status == status_filter)
+        query = query.where(FeyraCampaign.status == CampaignStatus(status_filter))
 
     result = await db.execute(query.order_by(FeyraCampaign.created_at.desc()))
     campaigns = result.scalars().all()
@@ -2463,7 +2468,7 @@ async def dashboard_activity(
                 id=lead.id,
                 event_type="lead_created",
                 description=f"New lead added: {lead.email}",
-                metadata={"lead_id": lead.id, "source": lead.source or "manual"},
+                metadata={"lead_id": lead.id, "source": lead.source.value if lead.source else "manual"},
                 created_at=lead.created_at or _now(),
             ))
     except Exception:
@@ -2481,8 +2486,8 @@ async def dashboard_activity(
             items.append(ActivityFeedItem(
                 id=campaign.id,
                 event_type="campaign_updated",
-                description=f"Campaign '{campaign.name}' — {campaign.status}",
-                metadata={"campaign_id": campaign.id, "status": campaign.status or ""},
+                description=f"Campaign '{campaign.name}' — {campaign.status.value if campaign.status else ''}",
+                metadata={"campaign_id": campaign.id, "status": campaign.status.value if campaign.status else ""},
                 created_at=campaign.updated_at or _now(),
             ))
     except Exception:
@@ -2500,8 +2505,8 @@ async def dashboard_activity(
             items.append(ActivityFeedItem(
                 id=job.id,
                 event_type="crawl_updated",
-                description=f"Crawl '{job.name}' — {job.status} ({job.leads_found or 0} found)",
-                metadata={"crawl_id": job.id, "status": job.status or ""},
+                description=f"Crawl '{job.name}' — {job.status.value if job.status else ''} ({job.leads_found or 0} found)",
+                metadata={"crawl_id": job.id, "status": job.status.value if job.status else ""},
                 created_at=job.updated_at or _now(),
             ))
     except Exception:

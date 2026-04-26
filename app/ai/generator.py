@@ -13,12 +13,17 @@ import json
 import logging
 import random
 import time
+from typing import TYPE_CHECKING
 
 import asyncio
 
 import httpx
 
 from app.ai.prompts import build_prompt
+
+if TYPE_CHECKING:
+    from app.ai.planner import SiteBlueprint
+
 from app.config import settings
 from app.database import get_db_session
 from app.platform_settings.service import get_setting
@@ -148,7 +153,7 @@ _VALID_TOP_LEVEL_KEYS = {
     "hero", "about", "features", "stats", "services", "process",
     "gallery", "team", "testimonials", "faq", "cta", "contact",
     "pricing", "video", "logo_cloud", "custom_content", "banner",
-    "ranking",
+    "ranking", "quiz",
     "seo",
     "pages", "install_apps",
 }
@@ -161,12 +166,81 @@ def _strip_unknown_keys(site_data: dict) -> None:
             del site_data[key]
 
 
+def _promote_home_page_sections(site_data: dict) -> None:
+    """If the AI placed home-page sections inside pages[0].sections instead of
+    at the top level, extract them so the viewer can render them."""
+    # Only act when ALL content sections are null/missing
+    _SECTION_KEYS = {
+        "hero", "about", "features", "stats", "services", "process",
+        "gallery", "team", "testimonials", "faq", "cta", "contact",
+        "pricing", "video", "logo_cloud", "custom_content", "banner",
+        "ranking", "quiz",
+    }
+    has_any_section = any(site_data.get(k) for k in _SECTION_KEYS)
+    if has_any_section:
+        return
+
+    pages = site_data.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return
+
+    home_page = None
+    home_idx = None
+    for idx, page in enumerate(pages):
+        if not isinstance(page, dict):
+            continue
+        slug = page.get("slug", "")
+        if slug in ("/", "", "home", "hem"):
+            home_page = page
+            home_idx = idx
+            break
+
+    if not home_page:
+        # Fallback: use the first page if it has sections
+        if isinstance(pages[0], dict) and pages[0].get("sections"):
+            home_page = pages[0]
+            home_idx = 0
+        else:
+            return
+
+    sections = home_page.get("sections")
+    if not isinstance(sections, list) or not sections:
+        return
+
+    # Build section_order from the page sections
+    promoted_order = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        stype = section.get("type")
+        sdata = section.get("data")
+        if not stype or not isinstance(sdata, dict):
+            continue
+        if stype in _SECTION_KEYS:
+            site_data[stype] = sdata
+            promoted_order.append(stype)
+
+    if promoted_order:
+        # Update section_order to match what we promoted
+        site_data["section_order"] = promoted_order
+        # Remove the home page from pages since it's now at top level
+        if home_idx is not None:
+            pages.pop(home_idx)
+        logger.info(
+            "Promoted %d sections from pages[%s] to top level: %s",
+            len(promoted_order), home_idx, promoted_order,
+        )
+
+
 def _sanitize_ai_output(site_data: dict) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
     - Remove gallery images with null/empty URLs
     - Replace null strings with empty strings for required string fields
     """
+    # Promote home-page sections from pages[] to top level if needed
+    _promote_home_page_sections(site_data)
+
     # Remove gallery images missing a URL
     gallery = site_data.get("gallery")
     if isinstance(gallery, dict) and "images" in gallery:
@@ -214,6 +288,9 @@ async def generate_site(
     industry_prompt_hint: str | None = None,
     industry_default_sections: list[str] | None = None,
     crawl_report: dict | None = None,
+    blueprint: "SiteBlueprint | None" = None,
+    context: str | None = None,
+    is_freeform: bool = False,
 ) -> GenerationResult:
     """
     Generate a complete SiteSchema using an LLM.
@@ -232,24 +309,55 @@ async def generate_site(
         except Exception:
             model = settings.AI_MODEL
 
-    system_prompt, user_prompt = build_prompt(
-        business_name=business_name,
-        industry=industry,
-        website_url=website_url,
-        email=email,
-        phone=phone,
-        address=address,
-        texts=texts,
-        colors=colors,
-        services=services,
-        logo_url=logo_url,
-        social_links=social_links,
-        images=images,
-        visual_analysis=visual_analysis,
-        industry_prompt_hint=industry_prompt_hint,
-        industry_default_sections=industry_default_sections,
-        crawl_report=crawl_report,
-    )
+    if blueprint and is_freeform:
+        from app.ai.prompts import build_freeform_prompt
+        system_prompt, user_prompt = build_freeform_prompt(
+            blueprint=blueprint,
+            business_name=business_name,
+            context=context or "",
+            email=email,
+            colors=colors,
+            logo_url=logo_url,
+            images=images,
+        )
+    elif blueprint:
+        from app.ai.prompts import build_blueprint_prompt
+        system_prompt, user_prompt = build_blueprint_prompt(
+            blueprint=blueprint,
+            business_name=business_name,
+            industry=industry,
+            website_url=website_url,
+            email=email,
+            phone=phone,
+            address=address,
+            texts=texts,
+            colors=colors,
+            services=services,
+            logo_url=logo_url,
+            social_links=social_links,
+            images=images,
+            visual_analysis=visual_analysis,
+            crawl_report=crawl_report,
+        )
+    else:
+        system_prompt, user_prompt = build_prompt(
+            business_name=business_name,
+            industry=industry,
+            website_url=website_url,
+            email=email,
+            phone=phone,
+            address=address,
+            texts=texts,
+            colors=colors,
+            services=services,
+            logo_url=logo_url,
+            social_links=social_links,
+            images=images,
+            visual_analysis=visual_analysis,
+            industry_prompt_hint=industry_prompt_hint,
+            industry_default_sections=industry_default_sections,
+            crawl_report=crawl_report,
+        )
 
     last_error = None
     for attempt in range(2):
@@ -351,7 +459,13 @@ async def _call_anthropic(
     payload = {
         "model": model,
         "max_tokens": 16000,
-        "system": system,
+        "system": [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         "messages": [{"role": "user", "content": user_content}],
         "temperature": 0.5,
     }

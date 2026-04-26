@@ -96,6 +96,11 @@ async def execute_publish(db: AsyncSession, post_id: str) -> PublishResult:
     if not post:
         return PublishResult(success=False, error="Post not found")
 
+    # Idempotency check: if already published, return success
+    if post.platform_post_id and post.status == PostStatus.PUBLISHED:
+        logger.info("Post %s already published (platform_post_id=%s), skipping", post_id, post.platform_post_id)
+        return PublishResult(success=True, platform_post_id=post.platform_post_id)
+
     source_q = await db.execute(
         select(Source).where(Source.id == post.source_id)
     )

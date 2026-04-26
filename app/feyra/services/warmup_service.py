@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.feyra.models import (
+    ConnectionStatus,
     EmailAccount,
     WarmupEmail,
     WarmupEmailDirection,
@@ -32,11 +33,14 @@ async def get_warmup_pairs(db: AsyncSession) -> list[tuple[str, str]]:
     Returns a list of (sender_account_id, receiver_account_id) tuples.
     Each account appears at most once as sender and once as receiver.
     """
+    # Find accounts that are connected and have active warmup settings
     result = await db.execute(
-        select(EmailAccount).where(
+        select(EmailAccount)
+        .join(WarmupSettings, WarmupSettings.email_account_id == EmailAccount.id)
+        .where(
             and_(
-                EmailAccount.warmup_status.in_([WarmupStatus.WARMING, WarmupStatus.READY]),
-                EmailAccount.connection_status == "connected",
+                WarmupSettings.status.in_([WarmupStatus.WARMING, WarmupStatus.READY]),
+                EmailAccount.connection_status == ConnectionStatus.CONNECTED,
             )
         )
     )
@@ -88,16 +92,14 @@ async def calculate_daily_volume(settings: WarmupSettings) -> int:
 
     Linearly ramps from 1 email/day to max_daily_volume over ramp_up_days.
     """
-    if not settings.enabled:
+    if settings.status == WarmupStatus.IDLE:
         return 0
 
-    max_volume = settings.max_daily_volume or 20
-    ramp_days = settings.ramp_up_days or 30
+    max_volume = settings.daily_warmup_emails_max or 20
+    ramp_days = settings.warmup_duration_days or 30
 
-    # Calculate days since warmup started
+    # Calculate days since warmup started (use current_day if available)
     start_date = settings.created_at
-    if hasattr(settings, "started_at") and settings.started_at:
-        start_date = settings.started_at
 
     days_active = (datetime.now(timezone.utc) - start_date).days
     if days_active < 0:
@@ -195,7 +197,7 @@ async def calculate_reputation_score(db: AsyncSession, account_id: str) -> int:
     # Get counts of sent warmup emails for this account (last 30 days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     base_filter = and_(
-        WarmupEmail.sender_account_id == account_id,
+        WarmupEmail.from_account_id == account_id,
         WarmupEmail.direction == WarmupEmailDirection.SENT,
         WarmupEmail.created_at >= cutoff,
     )
@@ -284,7 +286,7 @@ async def check_warmup_readiness(
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=14)
     base_filter = and_(
-        WarmupEmail.sender_account_id == account_id,
+        WarmupEmail.from_account_id == account_id,
         WarmupEmail.direction == WarmupEmailDirection.SENT,
         WarmupEmail.created_at >= cutoff,
     )
@@ -387,7 +389,7 @@ async def process_warmup_cycle(db: AsyncSession) -> None:
             sent_today_result = await db.execute(
                 select(func.count()).select_from(WarmupEmail).where(
                     and_(
-                        WarmupEmail.sender_account_id == sender_id,
+                        WarmupEmail.from_account_id == sender_id,
                         WarmupEmail.direction == WarmupEmailDirection.SENT,
                         WarmupEmail.created_at >= today_start,
                     )
@@ -401,21 +403,23 @@ async def process_warmup_cycle(db: AsyncSession) -> None:
 
             for _ in range(remaining):
                 try:
-                    subject, body_html = await generate_warmup_email(sender.email, receiver.email)
+                    subject, body_html = await generate_warmup_email(sender.email_address, receiver.email_address)
                     body_text = subject  # Fallback plain text
 
                     msg_id = await send_email_smtp(
-                        sender, receiver.email, subject, body_html, body_text
+                        sender, receiver.email_address, subject, body_html, body_text
                     )
 
                     # Record the sent warmup email
                     warmup_email = WarmupEmail(
-                        sender_account_id=sender_id,
-                        receiver_account_id=receiver_id,
+                        from_account_id=sender_id,
+                        to_account_id=receiver_id,
                         direction=WarmupEmailDirection.SENT,
                         status=WarmupEmailStatus.SENT,
                         subject=subject,
+                        body_text=body_text,
                         message_id=msg_id,
+                        sent_at=datetime.now(timezone.utc),
                     )
                     db.add(warmup_email)
                     await db.flush()
@@ -427,7 +431,7 @@ async def process_warmup_cycle(db: AsyncSession) -> None:
                 except Exception:
                     logger.exception(
                         "Failed to send warmup email from %s to %s",
-                        sender.email, receiver.email,
+                        sender.email_address, receiver.email_address,
                     )
 
         except Exception:
@@ -452,8 +456,10 @@ async def process_spam_rescue(db: AsyncSession) -> None:
 
     # Get all active warmup accounts
     result = await db.execute(
-        select(EmailAccount).where(
-            EmailAccount.warmup_status.in_([WarmupStatus.WARMING, WarmupStatus.READY])
+        select(EmailAccount)
+        .join(WarmupSettings, WarmupSettings.email_account_id == EmailAccount.id)
+        .where(
+            WarmupSettings.status.in_([WarmupStatus.WARMING, WarmupStatus.READY])
         )
     )
     accounts = result.scalars().all()
@@ -483,7 +489,7 @@ async def process_spam_rescue(db: AsyncSession) -> None:
                         await db.flush()
                         logger.info(
                             "Rescued warmup email %s from spam for %s",
-                            msg_id, account.email,
+                            msg_id, account.email_address,
                         )
         except Exception:
-            logger.exception("Error during spam rescue for %s", account.email)
+            logger.exception("Error during spam rescue for %s", account.email_address)

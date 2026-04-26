@@ -34,6 +34,7 @@ from app.autoblogger.generator import generate_blog_post
 from app.autoblogger.sanitize import sanitize_html, sanitize_text
 from app.autoblogger.scheduler import calculate_initial_next_run_at
 from app.autoblogger.images import generate_featured_image
+from app.autoblogger.cache import cache_get, cache_set, cache_delete, cache_delete_pattern
 from app.rate_limit import limiter
 from app.database import get_db, get_db_session
 
@@ -48,6 +49,7 @@ from app.autoblogger.models import (
     PostStatus,
     Source,
     TaskFrequency,
+    TrainingProfile,
     UserSettings,
 )
 from app.autoblogger.analytics import track_event
@@ -75,13 +77,28 @@ class SourceCreate(BaseModel):
     def validate_platform_url(cls, v: str | None) -> str | None:
         if v is None:
             return v
+        import ipaddress
+        import socket
         parsed = urlparse(v)
         if parsed.scheme not in ("https", "http"):
             raise ValueError("URL must start with https:// (or http:// for localhost)")
-        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1"):
-            raise ValueError("HTTP is only allowed for localhost URLs; use https://")
         if not parsed.hostname:
             raise ValueError("Invalid URL format: missing hostname")
+        # Block private/internal IP ranges to prevent SSRF
+        try:
+            # Resolve hostname to IP to catch DNS rebinding
+            ip = ipaddress.ip_address(parsed.hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                if parsed.scheme == "http" and str(ip) in ("127.0.0.1", "::1"):
+                    return v  # Allow localhost for development
+                raise ValueError("URLs pointing to private/internal networks are not allowed")
+        except ValueError as e:
+            if "not allowed" in str(e):
+                raise
+            # hostname is not an IP, it's a domain name — that's fine
+            pass
+        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1"):
+            raise ValueError("HTTP is only allowed for localhost URLs; use https://")
         return v
 
 
@@ -155,6 +172,7 @@ class PostResponse(BaseModel):
     ai_model: Optional[str] = None
     word_count: Optional[int] = None
     reading_time_minutes: Optional[int] = None
+    ai_summary: Optional[str] = None
     credits_used: int
     created_at: datetime
     updated_at: datetime
@@ -281,6 +299,35 @@ class NotificationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# Training Profile
+class TrainingProfileUpdate(BaseModel):
+    brand_name: Optional[str] = Field(None, max_length=255)
+    brand_description: Optional[str] = None
+    tone_style: Optional[str] = None
+    target_audience: Optional[str] = None
+    writing_guidelines: Optional[str] = None
+    brand_images: Optional[list[str]] = None
+    example_posts: Optional[list[dict]] = None
+
+
+class TrainingProfileResponse(BaseModel):
+    id: str
+    user_id: str
+    brand_name: Optional[str] = None
+    brand_description: Optional[str] = None
+    tone_style: Optional[str] = None
+    target_audience: Optional[str] = None
+    writing_guidelines: Optional[str] = None
+    brand_images: Optional[list] = None
+    example_posts: Optional[list] = None
+    ai_generated_guidelines: Optional[str] = None
+    imported_post_summaries: Optional[list] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # Dashboard
 class DashboardStats(BaseModel):
     total_posts: int
@@ -320,10 +367,34 @@ async def _get_or_create_settings(db: AsyncSession, user_id: str) -> UserSetting
     return settings
 
 
+async def _get_or_create_training_profile(db: AsyncSession, user_id: str):
+    from app.autoblogger.models import TrainingProfile
+    result = await db.execute(
+        select(TrainingProfile).where(TrainingProfile.user_id == user_id)
+    )
+    profile = result.scalar_one_or_none()
+    if profile is None:
+        profile = TrainingProfile(user_id=user_id)
+        db.add(profile)
+        await db.flush()
+    return profile
+
+
 def _source_response_decrypted(source: Source) -> SourceResponse:
-    """Build a SourceResponse with platform_config secrets decrypted for the client."""
+    """Build a SourceResponse with sensitive platform_config values masked."""
     resp = SourceResponse.model_validate(source)
-    resp.platform_config = decrypt_platform_config(source.platform_config)
+    config = decrypt_platform_config(source.platform_config)
+    if config:
+        masked = dict(config)
+        for key in ("access_token", "app_password"):
+            if key in masked and masked[key]:
+                val = masked[key]
+                # Show first 4 and last 4 chars, mask the rest
+                if len(val) > 12:
+                    masked[key] = val[:4] + "*" * (len(val) - 8) + val[-4:]
+                else:
+                    masked[key] = "****"
+        resp.platform_config = masked
     return resp
 
 
@@ -334,6 +405,8 @@ def _source_response_decrypted(source: Source) -> SourceResponse:
 @limiter.limit("60/minute")
 async def list_sources(
     request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SourceResponse]:
@@ -341,6 +414,8 @@ async def list_sources(
         select(Source)
         .where(Source.user_id == current_user.id, Source.is_active.is_(True))
         .order_by(Source.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     sources = result.scalars().all()
     return [_source_response_decrypted(s) for s in sources]
@@ -458,6 +533,33 @@ async def _generate_post_background(
     """Generate a blog post in the background and update its record."""
     try:
         async with get_db_session() as db:
+            # Fetch training profile for context
+            training_profile = await _get_or_create_training_profile(db, user_id)
+            training_context = None
+            if training_profile.brand_name or training_profile.tone_style or training_profile.writing_guidelines:
+                training_context = {
+                    "brand_name": training_profile.brand_name,
+                    "brand_description": training_profile.brand_description,
+                    "tone_style": training_profile.tone_style,
+                    "target_audience": training_profile.target_audience,
+                    "writing_guidelines": training_profile.writing_guidelines,
+                    "ai_generated_guidelines": training_profile.ai_generated_guidelines,
+                    "example_posts": training_profile.example_posts,
+                }
+
+            # Fetch recent post summaries for deduplication
+            recent_posts_result = await db.execute(
+                select(BlogPostAB.ai_summary)
+                .where(
+                    BlogPostAB.user_id == user_id,
+                    BlogPostAB.ai_summary.isnot(None),
+                    BlogPostAB.status.in_([PostStatus.PUBLISHED, PostStatus.REVIEW, PostStatus.SCHEDULED]),
+                )
+                .order_by(BlogPostAB.created_at.desc())
+                .limit(20)
+            )
+            recent_summaries = [r[0] for r in recent_posts_result.all() if r[0]]
+
             result = await generate_blog_post(
                 topic=body.topic,
                 keywords=body.keywords,
@@ -465,6 +567,8 @@ async def _generate_post_background(
                 brand_voice=source.brand_voice,
                 ai_model=user_settings.ai_model,
                 title=body.title,
+                training_context=training_context,
+                recent_summaries=recent_summaries,
             )
 
             # Optional featured image
@@ -497,6 +601,7 @@ async def _generate_post_background(
             post.word_count = result.word_count
             post.reading_time_minutes = result.reading_time_minutes
             post.featured_image_url = featured_image_url
+            post.ai_summary = result.ai_summary
 
             # Credit handling — 1 credit was already deducted in the endpoint.
             # If long-form, deduct the extra credit now.
@@ -599,6 +704,9 @@ async def create_post(
         description="Blog post generation (reserved)",
     )
 
+    await cache_delete(f"credits:{current_user.id}")
+    await cache_delete(f"stats:{current_user.id}")
+
     # Get user settings
     user_settings = await _get_or_create_settings(db, current_user.id)
 
@@ -686,6 +794,36 @@ async def get_posts_calendar(
         days[day_key].append(PostResponse.model_validate(post))
 
     return {"days": dict(days)}
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+@router.post("/posts/bulk-delete", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@limiter.limit("10/minute")
+async def bulk_delete_posts(
+    body: BulkDeleteRequest,
+    request: Request,
+    current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete multiple posts at once. All posts must belong to the current user."""
+    result = await db.execute(
+        select(BlogPostAB).where(
+            BlogPostAB.id.in_(body.ids),
+            BlogPostAB.user_id == current_user.id,
+        )
+    )
+    posts = result.scalars().all()
+    if len(posts) != len(body.ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more posts not found or not owned by you",
+        )
+    for post in posts:
+        await db.delete(post)
+    await db.flush()
 
 
 @router.get("/posts/{post_id}", response_model=PostResponse)
@@ -897,6 +1035,10 @@ async def decline_post(
     post.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(post)
+
+    await cache_delete(f"credits:{current_user.id}")
+    await cache_delete(f"stats:{current_user.id}")
+
     return PostResponse.model_validate(post)
 
 
@@ -970,6 +1112,8 @@ async def regenerate_post(
 @limiter.limit("60/minute")
 async def list_schedules(
     request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ScheduleResponse]:
@@ -977,6 +1121,8 @@ async def list_schedules(
         select(ContentSchedule)
         .where(ContentSchedule.user_id == current_user.id)
         .order_by(ContentSchedule.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     schedules = result.scalars().all()
     return [ScheduleResponse.model_validate(s) for s in schedules]
@@ -1140,6 +1286,9 @@ async def update_settings(
     settings.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(settings)
+
+    await cache_delete(f"settings:{current_user.id}")
+
     return SettingsResponse.model_validate(settings)
 
 
@@ -1153,8 +1302,15 @@ async def get_credits(
     current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
     db: AsyncSession = Depends(get_db),
 ) -> CreditBalanceResponse:
+    cache_key = f"credits:{current_user.id}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return CreditBalanceResponse(**cached)
+
     balance = await _get_or_create_credit_balance(db, current_user.id)
-    return CreditBalanceResponse.model_validate(balance)
+    resp = CreditBalanceResponse.model_validate(balance)
+    await cache_set(cache_key, resp.model_dump(), ttl=300)
+    return resp
 
 
 @router.get("/credits/history", response_model=list[CreditTransactionResponse])
@@ -1262,6 +1418,292 @@ async def mark_all_notifications_read(
     return {"status": "ok"}
 
 
+# ─── Training Profile ───────────────────────────────────────────────────────
+
+
+@router.get("/training", response_model=TrainingProfileResponse)
+@limiter.limit("60/minute")
+async def get_training_profile(
+    request: Request,
+    current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
+    db: AsyncSession = Depends(get_db),
+) -> TrainingProfileResponse:
+    profile = await _get_or_create_training_profile(db, current_user.id)
+    return TrainingProfileResponse.model_validate(profile)
+
+
+@router.patch("/training", response_model=TrainingProfileResponse)
+@limiter.limit("30/minute")
+async def update_training_profile(
+    body: TrainingProfileUpdate,
+    request: Request,
+    current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
+    db: AsyncSession = Depends(get_db),
+) -> TrainingProfileResponse:
+    profile = await _get_or_create_training_profile(db, current_user.id)
+
+    update_data = body.model_dump(exclude_unset=True)
+    if "brand_description" in update_data and update_data["brand_description"]:
+        update_data["brand_description"] = sanitize_text(update_data["brand_description"])
+    if "tone_style" in update_data and update_data["tone_style"]:
+        update_data["tone_style"] = sanitize_text(update_data["tone_style"])
+    if "writing_guidelines" in update_data and update_data["writing_guidelines"]:
+        update_data["writing_guidelines"] = sanitize_text(update_data["writing_guidelines"])
+
+    for key, value in update_data.items():
+        setattr(profile, key, value)
+
+    profile.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(profile)
+    return TrainingProfileResponse.model_validate(profile)
+
+
+@router.post("/training/import-posts")
+@limiter.limit("10/hour")
+async def import_posts_from_sources(
+    request: Request,
+    current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import existing blog posts from all connected sources for training."""
+    # Get all active sources
+    sources_result = await db.execute(
+        select(Source).where(Source.user_id == current_user.id, Source.is_active.is_(True))
+    )
+    sources = sources_result.scalars().all()
+
+    if not sources:
+        raise HTTPException(status_code=400, detail="No connected sources found")
+
+    imported = []
+
+    for source in sources:
+        config = decrypt_platform_config(source.platform_config)
+        platform = source.platform.value
+
+        try:
+            if platform == "SHOPIFY" and config:
+                posts = await _fetch_shopify_posts(config, source.name)
+                imported.extend(posts)
+            elif platform == "QVICKO" and config:
+                posts = await _fetch_qvicko_posts(config, source.name)
+                imported.extend(posts)
+            elif platform == "CUSTOM" and config:
+                posts = await _fetch_wordpress_posts(config, source.name)
+                imported.extend(posts)
+        except Exception as e:
+            logger.warning("Failed to import posts from source %s: %s", source.name, e)
+            continue
+
+    # Also include posts generated in AutoBlogger
+    ab_posts_result = await db.execute(
+        select(BlogPostAB)
+        .where(
+            BlogPostAB.user_id == current_user.id,
+            BlogPostAB.status.in_([PostStatus.PUBLISHED, PostStatus.REVIEW]),
+            BlogPostAB.content.isnot(None),
+        )
+        .order_by(BlogPostAB.created_at.desc())
+        .limit(50)
+    )
+    ab_posts = ab_posts_result.scalars().all()
+    for p in ab_posts:
+        imported.append({
+            "title": p.title,
+            "summary": p.ai_summary or p.excerpt or "",
+            "source": "AutoBlogger",
+        })
+
+    # Save to training profile
+    profile = await _get_or_create_training_profile(db, current_user.id)
+    profile.imported_post_summaries = imported[:100]  # Cap at 100
+    profile.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    return {"imported_count": len(imported), "posts": imported[:100]}
+
+
+@router.post("/training/analyze")
+@limiter.limit("5/hour")
+async def analyze_imported_posts(
+    request: Request,
+    current_user: AutoBloggerUser = Depends(get_current_autoblogger_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Use AI to analyze imported posts and generate writing guidelines."""
+    profile = await _get_or_create_training_profile(db, current_user.id)
+
+    posts_to_analyze = profile.imported_post_summaries or []
+    example_posts = profile.example_posts or []
+
+    if not posts_to_analyze and not example_posts:
+        raise HTTPException(status_code=400, detail="No imported posts to analyze. Import posts first.")
+
+    # Build analysis prompt
+    posts_text = ""
+    for p in (posts_to_analyze + example_posts)[:30]:
+        title = p.get("title", "Untitled")
+        summary = p.get("summary", p.get("excerpt", p.get("content_snippet", "")))
+        posts_text += f"- {title}: {summary[:200]}\n"
+
+    analysis_prompt = (
+        "Analyze the following blog posts and create a concise style guide that captures "
+        "the writing patterns, tone, structure, and voice used. The guide should help an AI "
+        "writer replicate this style in future blog posts.\n\n"
+        f"Brand: {profile.brand_name or 'Unknown'}\n"
+        f"Description: {profile.brand_description or 'N/A'}\n\n"
+        f"Posts to analyze:\n{posts_text}\n\n"
+        "Return a concise style guide (max 500 words) covering:\n"
+        "1. Tone & voice (formal/casual, technical level, personality)\n"
+        "2. Structure patterns (paragraph length, heading style, use of lists)\n"
+        "3. Language patterns (sentence length, vocabulary level, common phrases)\n"
+        "4. Content patterns (how topics are introduced, concluded, examples used)\n"
+        "5. Any unique stylistic elements (emojis, humor, questions to reader, etc.)\n\n"
+        "Write the guide as direct instructions to a blog writer."
+    )
+
+    import httpx
+    from app.config import settings as app_settings
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": app_settings.ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 2048,
+                    "messages": [{"role": "user", "content": analysis_prompt}],
+                    "temperature": 0.3,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            guidelines = data["content"][0]["text"]
+    except Exception as e:
+        logger.exception("Failed to analyze posts with AI")
+        raise HTTPException(status_code=502, detail=f"AI analysis failed: {str(e)}")
+
+    profile.ai_generated_guidelines = guidelines
+    profile.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    return {"guidelines": guidelines}
+
+
+async def _fetch_shopify_posts(config: dict, source_name: str) -> list[dict]:
+    """Fetch existing blog posts from Shopify."""
+    import httpx
+    access_token = config.get("access_token")
+    shop_domain = config.get("shop_domain")
+    if not access_token or not shop_domain:
+        return []
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Get blogs first
+        blogs_resp = await client.get(
+            f"https://{shop_domain}/admin/api/2024-01/blogs.json",
+            headers={"X-Shopify-Access-Token": access_token},
+        )
+        if blogs_resp.status_code != 200:
+            return []
+        blogs = blogs_resp.json().get("blogs", [])
+
+        posts = []
+        for blog in blogs:
+            articles_resp = await client.get(
+                f"https://{shop_domain}/admin/api/2024-01/blogs/{blog['id']}/articles.json",
+                headers={"X-Shopify-Access-Token": access_token},
+                params={"limit": 50, "fields": "id,title,summary_html,body_html"},
+            )
+            if articles_resp.status_code != 200:
+                continue
+            for article in articles_resp.json().get("articles", []):
+                import re
+                body_text = re.sub(r'<[^>]+>', '', article.get("body_html", ""))[:300]
+                posts.append({
+                    "title": article.get("title", ""),
+                    "summary": article.get("summary_html", body_text)[:200],
+                    "source": f"Shopify - {source_name}",
+                })
+
+        return posts
+
+
+async def _fetch_qvicko_posts(config: dict, source_name: str) -> list[dict]:
+    """Fetch existing blog posts from Qvicko via OAuth API."""
+    import httpx
+    token = config.get("oauth_access_token")
+    if not token:
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{config.get('api_url', 'https://api.qvicko.com')}/api/oauth/blog/posts",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": 50},
+            )
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            posts = []
+            for p in (data if isinstance(data, list) else data.get("posts", [])):
+                posts.append({
+                    "title": p.get("title", ""),
+                    "summary": p.get("excerpt", p.get("content", ""))[:200],
+                    "source": f"Qvicko - {source_name}",
+                })
+            return posts
+    except Exception:
+        return []
+
+
+async def _fetch_wordpress_posts(config: dict, source_name: str) -> list[dict]:
+    """Fetch existing blog posts from WordPress."""
+    import base64
+    import httpx
+    import re
+
+    api_url = config.get("api_url", "")
+    username = config.get("username", "")
+    app_password = config.get("app_password", "")
+    if not api_url or not username:
+        return []
+
+    # Normalize URL
+    if not api_url.endswith("/wp-json/wp/v2"):
+        api_url = api_url.rstrip("/") + "/wp-json/wp/v2"
+
+    auth = base64.b64encode(f"{username}:{app_password}".encode()).decode()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{api_url}/posts",
+                headers={"Authorization": f"Basic {auth}"},
+                params={"per_page": 50, "status": "publish"},
+            )
+            if resp.status_code != 200:
+                return []
+            posts = []
+            for p in resp.json():
+                body_text = re.sub(r'<[^>]+>', '', p.get("content", {}).get("rendered", ""))[:300]
+                posts.append({
+                    "title": p.get("title", {}).get("rendered", ""),
+                    "summary": p.get("excerpt", {}).get("rendered", body_text)[:200],
+                    "source": f"WordPress - {source_name}",
+                })
+            return posts
+    except Exception:
+        return []
+
+
 # ─── Dashboard Stats ────────────────────────────────────────────────────────
 
 
@@ -1274,43 +1716,27 @@ async def get_stats(
 ) -> DashboardStats:
     user_id = current_user.id
 
-    # Total posts
-    total_result = await db.execute(
-        select(func.count(BlogPostAB.id)).where(BlogPostAB.user_id == user_id)
-    )
-    total_posts = total_result.scalar() or 0
+    # Check cache first
+    cache_key = f"stats:{user_id}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return DashboardStats(**cached)
 
-    # Published posts
-    published_result = await db.execute(
-        select(func.count(BlogPostAB.id)).where(
-            BlogPostAB.user_id == user_id,
-            BlogPostAB.status == PostStatus.PUBLISHED,
-        )
+    # Single query for all post status counts
+    post_counts_result = await db.execute(
+        select(
+            func.count(BlogPostAB.id).label("total"),
+            func.count(BlogPostAB.id).filter(BlogPostAB.status == PostStatus.PUBLISHED).label("published"),
+            func.count(BlogPostAB.id).filter(BlogPostAB.status == PostStatus.SCHEDULED).label("scheduled"),
+            func.count(BlogPostAB.id).filter(BlogPostAB.status == PostStatus.DRAFT).label("draft"),
+        ).where(BlogPostAB.user_id == user_id)
     )
-    published_posts = published_result.scalar() or 0
-
-    # Scheduled posts
-    scheduled_result = await db.execute(
-        select(func.count(BlogPostAB.id)).where(
-            BlogPostAB.user_id == user_id,
-            BlogPostAB.status == PostStatus.SCHEDULED,
-        )
-    )
-    scheduled_posts = scheduled_result.scalar() or 0
-
-    # Draft posts
-    draft_result = await db.execute(
-        select(func.count(BlogPostAB.id)).where(
-            BlogPostAB.user_id == user_id,
-            BlogPostAB.status == PostStatus.DRAFT,
-        )
-    )
-    draft_posts = draft_result.scalar() or 0
+    counts = post_counts_result.one()
 
     # Credits
     balance = await _get_or_create_credit_balance(db, user_id)
 
-    # Connected sources
+    # Connected sources count
     sources_result = await db.execute(
         select(func.count(Source.id)).where(
             Source.user_id == user_id,
@@ -1319,7 +1745,7 @@ async def get_stats(
     )
     connected_sources = sources_result.scalar() or 0
 
-    # Active schedules
+    # Active schedules count
     schedules_result = await db.execute(
         select(func.count(ContentSchedule.id)).where(
             ContentSchedule.user_id == user_id,
@@ -1328,13 +1754,15 @@ async def get_stats(
     )
     active_schedules = schedules_result.scalar() or 0
 
-    return DashboardStats(
-        total_posts=total_posts,
-        published_posts=published_posts,
-        scheduled_posts=scheduled_posts,
-        draft_posts=draft_posts,
+    stats = DashboardStats(
+        total_posts=counts.total,
+        published_posts=counts.published,
+        scheduled_posts=counts.scheduled,
+        draft_posts=counts.draft,
         credits_remaining=balance.credits_remaining,
         credits_used=balance.credits_used_total,
         connected_sources=connected_sources,
         active_schedules=active_schedules,
     )
+    await cache_set(cache_key, stats.model_dump(), ttl=300)
+    return stats
