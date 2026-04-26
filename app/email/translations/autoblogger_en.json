@@ -1,0 +1,132 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 AutoBlogger. All rights reserved.",
+    "sign_off": "\u2014 AutoBlogger",
+    "default_user_name": "user",
+    "copy_link_prefix": "Or copy this link:",
+    "questions_reply": "Have questions? Reply to this email and we\u2019ll help you.",
+    "ignore_if_not_requested": "If you didn\u2019t request this, you can safely ignore this message.",
+    "unsubscribe": "You\u2019re receiving this because you\u2019re subscribed to AutoBlogger updates. {link_start}Unsubscribe{link_end}."
+  },
+
+  "verification": {
+    "subject": "Verify your email address \u2014 AutoBlogger",
+    "heading": "Verify your email address",
+    "greeting": "Hi {name},",
+    "body": "Thank you for creating an account with AutoBlogger! Click the button below to verify your email address and activate your account. The link is valid for 24\u00a0hours.",
+    "cta": "Verify email",
+    "ignore": "If you didn\u2019t create an account, you can safely ignore this message."
+  },
+
+  "password_reset": {
+    "subject": "Reset your password \u2014 AutoBlogger",
+    "heading": "Reset your password",
+    "greeting": "Hi {name},",
+    "body": "We received a request to reset the password for your AutoBlogger account. Click the button below to choose a new password. The link is valid for 30\u00a0minutes.",
+    "cta": "Reset password"
+  },
+
+  "payment_confirmation": {
+    "subject": "Payment confirmed \u2014 AutoBlogger",
+    "heading": "Payment confirmed",
+    "greeting": "Hi there,",
+    "body": "Your payment of {amount} has been successfully processed. Thank you for your continued subscription to AutoBlogger.",
+    "info": "Your next billing date is {next_billing_date}. You can manage your subscription at any time from the dashboard.",
+    "cta": "Go to dashboard"
+  },
+
+  "plan_change": {
+    "subject": "Plan changed \u2014 AutoBlogger",
+    "heading": "Your plan has been updated",
+    "greeting": "Hi there,",
+    "body": "Your AutoBlogger subscription has been changed from {old_plan} to {new_plan}.",
+    "info": "The change takes effect immediately. Your new credit allowance and features are now active.",
+    "cta": "Go to dashboard"
+  },
+
+  "post_generated": {
+    "subject": "Your post is ready \u2014 {post_title}",
+    "heading": "Your blog post is ready!",
+    "greeting": "Hi there,",
+    "body": "Your blog post \u201c{post_title}\u201d has been generated and is ready for review.",
+    "cta": "View post",
+    "note": "You can edit the post before publishing it to your blog."
+  },
+
+  "post_failed": {
+    "subject": "Post generation failed \u2014 {post_title}",
+    "heading": "Post generation failed",
+    "greeting": "Hi there,",
+    "body": "Unfortunately, the blog post \u201c{post_title}\u201d could not be generated.",
+    "error_label": "Error:",
+    "cta": "Retry",
+    "note": "If the problem persists, please contact support."
+  },
+
+  "post_review": {
+    "subject": "Post awaiting review \u2014 {post_title}",
+    "heading": "A post is waiting for your review",
+    "greeting": "Hi there,",
+    "body": "The blog post \u201c{post_title}\u201d has been generated and is waiting for your approval before publishing.",
+    "cta_approve": "Approve post",
+    "cta_decline": "Decline",
+    "note": "Review the post and approve it to publish, or decline to discard it."
+  },
+
+  "weekly_summary": {
+    "subject": "Your weekly AutoBlogger summary",
+    "heading": "Weekly summary",
+    "greeting": "Hi there,",
+    "body": "Here\u2019s a summary of your AutoBlogger activity this week.",
+    "posts_generated_label": "Posts generated",
+    "posts_published_label": "Posts published",
+    "credits_used_label": "Credits used",
+    "credits_remaining_label": "Credits remaining",
+    "cta": "Go to dashboard"
+  },
+
+  "credits_low": {
+    "subject": "Credits running low \u2014 AutoBlogger",
+    "heading": "Your credits are running low",
+    "greeting": "Hi there,",
+    "body": "You have {credits_remaining} of {total_credits} credits remaining. At this rate, you may run out soon.",
+    "info": "Upgrade your plan or purchase additional credits to keep generating blog posts without interruption.",
+    "cta": "Manage credits"
+  },
+
+  "credits_exhausted": {
+    "subject": "Credits exhausted \u2014 AutoBlogger",
+    "heading": "You\u2019ve run out of credits",
+    "greeting": "Hi there,",
+    "body": "Your AutoBlogger credit balance has reached zero. No more blog posts can be generated until you add credits.",
+    "warning": "Scheduled posts will be paused until credits are available.",
+    "cta": "Upgrade plan"
+  },
+
+  "ab_trial_ending": {
+    "subject": "Your AutoBlogger trial ends in 3 days",
+    "heading": "Your trial is ending soon",
+    "greeting": "Hi there,",
+    "body": "Your AutoBlogger trial ends on {trial_end_date}. Upgrade now to keep generating blog posts automatically.",
+    "info": "After the trial, your scheduled posts will be paused and no new posts will be generated.",
+    "cta": "Upgrade now"
+  },
+
+  "ab_payment_failed": {
+    "subject": "Payment failed \u2014 AutoBlogger",
+    "heading": "Payment could not be processed",
+    "greeting": "Hi there,",
+    "body": "We were unable to process your latest AutoBlogger subscription payment. Please update your payment method to avoid service interruption.",
+    "warning": "If the payment is not resolved within 7\u00a0days, your subscription will be paused.",
+    "cta": "Update payment method"
+  },
+
+  "ab_welcome": {
+    "subject": "Welcome to AutoBlogger!",
+    "heading": "Welcome to AutoBlogger!",
+    "greeting": "Hi {user_name},",
+    "body": "Thank you for signing up for AutoBlogger! We\u2019re excited to help you create high-quality blog content automatically.",
+    "info": "Get started by adding your first source and configuring your blog settings. AutoBlogger will take care of the rest.",
+    "cta": "Get started"
+  }
+}

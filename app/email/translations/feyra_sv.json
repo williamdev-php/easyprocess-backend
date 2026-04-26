@@ -1,0 +1,92 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 Feyra. Alla r\u00e4ttigheter f\u00f6rbeh\u00e5llna.",
+    "sign_off": "\u2014 Feyra",
+    "default_user_name": "anv\u00e4ndare",
+    "copy_link_prefix": "Eller kopiera denna l\u00e4nk:",
+    "questions_reply": "Har du fr\u00e5gor? Svara p\u00e5 detta mail s\u00e5 hj\u00e4lper vi dig.",
+    "ignore_if_not_requested": "Om du inte beg\u00e4rde detta kan du ignorera detta meddelande."
+  },
+
+  "verification": {
+    "subject": "Verifiera din e-postadress \u2014 Feyra",
+    "heading": "Verifiera din e-postadress",
+    "greeting": "Hej {name},",
+    "body": "Tack f\u00f6r att du skapade ett konto hos Feyra! Klicka p\u00e5 knappen nedan f\u00f6r att verifiera din e-postadress och aktivera ditt konto. L\u00e4nken \u00e4r giltig i 24\u00a0timmar.",
+    "cta": "Verifiera e-post",
+    "ignore": "Om du inte skapade ett konto kan du ignorera detta meddelande."
+  },
+
+  "password_reset": {
+    "subject": "\u00c5terst\u00e4ll ditt l\u00f6senord \u2014 Feyra",
+    "heading": "\u00c5terst\u00e4ll ditt l\u00f6senord",
+    "greeting": "Hej {name},",
+    "body": "Vi har f\u00e5tt en beg\u00e4ran om att \u00e5terst\u00e4lla l\u00f6senordet f\u00f6r ditt Feyra-konto. Klicka p\u00e5 knappen nedan f\u00f6r att v\u00e4lja ett nytt l\u00f6senord. L\u00e4nken \u00e4r giltig i 30\u00a0minuter.",
+    "cta": "\u00c5terst\u00e4ll l\u00f6senord"
+  },
+
+  "welcome": {
+    "subject": "V\u00e4lkommen till Feyra!",
+    "heading": "V\u00e4lkommen till Feyra!",
+    "greeting": "Hej {user_name},",
+    "body": "Tack f\u00f6r att du registrerade dig f\u00f6r Feyra! Vi \u00e4r glada att hj\u00e4lpa dig hantera din e-postutskick och leadgenerering.",
+    "info": "Kom ig\u00e5ng genom att ansluta dina e-postkonton och importera dina f\u00f6rsta leads. Feyra sk\u00f6ter uppv\u00e4rmning och leveransbarhet \u00e5t dig.",
+    "cta": "Kom ig\u00e5ng"
+  },
+
+  "campaign_sent": {
+    "subject": "Kampanj skickad \u2014 Feyra",
+    "heading": "Din kampanj har skickats!",
+    "greeting": "Hej,",
+    "body": "Din kampanj \u201c{campaign_name}\u201d har skickats till {recipient_count} mottagare.",
+    "info": "Du kan f\u00f6lja \u00f6ppningar, klick och svar i realtid fr\u00e5n din kontrollpanel.",
+    "cta": "Visa kampanj"
+  },
+
+  "lead_import_complete": {
+    "subject": "Leadimport klar \u2014 Feyra",
+    "heading": "Leadimport klar",
+    "greeting": "Hej,",
+    "body": "Din leadimport \u00e4r klar. {imported_count} leads importerades.",
+    "info": "Dubbletter och ogiltiga poster hoppades \u00f6ver automatiskt.",
+    "cta": "Visa leads"
+  },
+
+  "warmup_status": {
+    "subject": "Uppv\u00e4rmningsstatus \u2014 Feyra",
+    "heading": "Uppv\u00e4rmningsstatus",
+    "greeting": "Hej,",
+    "body": "Uppv\u00e4rmningen f\u00f6r ditt e-postkonto {email_account} \u00e4r {status}.",
+    "info_active": "Uppv\u00e4rmningen fortskrider bra. Ditt s\u00e4ndningsrykte byggs upp gradvis.",
+    "info_complete": "Uppv\u00e4rmningen \u00e4r klar! Ditt e-postkonto \u00e4r redo f\u00f6r full volym.",
+    "info_issue": "Det uppstod ett problem med uppv\u00e4rmningen. Kontrollera dina e-postkontoinst\u00e4llningar.",
+    "cta": "Visa uppv\u00e4rmningsstatus"
+  },
+
+  "payment_confirmation": {
+    "subject": "Betalning bekr\u00e4ftad \u2014 Feyra",
+    "heading": "Betalning bekr\u00e4ftad",
+    "greeting": "Hej,",
+    "body": "Din betalning p\u00e5 {amount} har genomf\u00f6rts. Tack f\u00f6r din prenumeration p\u00e5 Feyra.",
+    "info": "N\u00e4sta faktureringsdatum \u00e4r {next_billing_date}. Du kan hantera din prenumeration n\u00e4r som helst fr\u00e5n kontrollpanelen.",
+    "cta": "G\u00e5 till kontrollpanelen"
+  },
+
+  "payment_failed": {
+    "subject": "Betalningen misslyckades \u2014 Feyra",
+    "heading": "Betalningen kunde inte genomf\u00f6ras",
+    "greeting": "Hej,",
+    "body": "Vi kunde inte genomf\u00f6ra din senaste Feyra-prenumerationsbetalning. Uppdatera din betalningsmetod f\u00f6r att undvika avbrott i tj\u00e4nsten.",
+    "warning": "Om betalningen inte l\u00f6ses inom 7\u00a0dagar pausas din prenumeration.",
+    "cta": "Uppdatera betalningsmetod"
+  },
+
+  "trial_ending": {
+    "subject": "Din Feyra-provperiod slutar om 3 dagar",
+    "heading": "Din provperiod slutar snart",
+    "greeting": "Hej,",
+    "body": "Din Feyra-provperiod slutar {trial_end_date}. Uppgradera nu f\u00f6r att forts\u00e4tta anv\u00e4nda alla funktioner utan avbrott.",
+    "info": "Efter provperioden pausas dina kampanjer och uppv\u00e4rmning.",
+    "cta": "Uppgradera nu"
+  }
+}

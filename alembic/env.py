@@ -12,6 +12,10 @@ from app.database import Base, SCHEMA
 from app.auth.models import User, Session, AuditLog, SocialAccount, PasswordResetToken, EmailVerificationToken, SettingsAuditLog  # noqa: F401
 from app.sites.models import Lead, ScrapedData, GeneratedSite, OutreachEmail, InboundEmail  # noqa: F401
 from app.smartlead.models import SmartleadCampaign, SmartleadEmailAccount  # noqa: F401
+from app.feyra.models import FeyraBase, FEYRA_SCHEMA  # noqa: F401
+from app.feyra.models import EmailAccount, WarmupSettings, WarmupEmail  # noqa: F401
+from app.feyra.models import Lead as FeyraLead, CrawlJob, CrawlResult  # noqa: F401
+from app.feyra.models import Campaign, CampaignStep, CampaignLead, SentEmail, GlobalSettings  # noqa: F401
 
 config = context.config
 

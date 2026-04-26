@@ -21,3 +21,4 @@ anthropic
 stripe
 python-dateutil
 nh3
+cryptography

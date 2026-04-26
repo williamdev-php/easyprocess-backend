@@ -285,22 +285,35 @@ async def stripe_webhook(request: Request):
 
     async with get_db_session() as db:
         try:
-            if event.type == "customer.subscription.created":
-                await handle_subscription_created(db, event.data.object)
+            # Check if this is an AutoBlogger event by inspecting metadata
+            _obj = event.data.object
+            _is_autoblogger = _check_autoblogger_event(_obj, event.type)
+
+            if _is_autoblogger and event.type in (
+                "customer.subscription.created",
+                "customer.subscription.updated",
+            ):
+                await _handle_autoblogger_subscription_update(db, _obj)
+            elif _is_autoblogger and event.type == "customer.subscription.deleted":
+                await _handle_autoblogger_subscription_deleted(db, _obj)
+            elif _is_autoblogger and event.type == "invoice.payment_succeeded":
+                await _handle_autoblogger_invoice_paid(db, _obj)
+            elif event.type == "customer.subscription.created":
+                await handle_subscription_created(db, _obj)
             elif event.type == "customer.subscription.updated":
-                await handle_subscription_updated(db, event.data.object)
+                await handle_subscription_updated(db, _obj)
             elif event.type == "customer.subscription.deleted":
-                await handle_subscription_deleted(db, event.data.object)
+                await handle_subscription_deleted(db, _obj)
             elif event.type == "invoice.payment_succeeded":
-                await handle_invoice_paid(db, event.data.object)
+                await handle_invoice_paid(db, _obj)
             elif event.type == "invoice.payment_failed":
-                await handle_invoice_failed(db, event.data.object)
+                await handle_invoice_failed(db, _obj)
             elif event.type == "customer.subscription.trial_will_end":
-                await handle_trial_will_end(db, event.data.object)
+                await handle_trial_will_end(db, _obj)
             elif event.type == "payment_intent.succeeded":
-                await _handle_domain_purchase_success(db, event.data.object)
+                await _handle_domain_purchase_success(db, _obj)
             elif event.type == "payment_intent.payment_failed":
-                await _handle_domain_purchase_failure(db, event.data.object)
+                await _handle_domain_purchase_failure(db, _obj)
             else:
                 logger.debug("Unhandled Stripe event type: %s", event.type)
 
@@ -461,3 +474,195 @@ async def _handle_domain_purchase_failure(db: AsyncSession, payment_intent) -> N
         purchase.status = DomainPurchaseStatus.FAILED
         await db.flush()
         logger.info("Domain purchase payment failed for %s", purchase.domain)
+
+
+# ---------------------------------------------------------------------------
+# AutoBlogger webhook helpers
+# ---------------------------------------------------------------------------
+
+def _check_autoblogger_event(obj, event_type: str) -> bool:
+    """Check if a Stripe event object belongs to AutoBlogger via metadata."""
+    from app.billing.service import _get_metadata, _get_invoice_subscription_id
+
+    # For subscription events, check metadata directly
+    if event_type.startswith("customer.subscription."):
+        return bool(_get_metadata(obj, "autoblogger_user_id"))
+
+    # For invoice events, we need to look up the subscription's metadata
+    if event_type.startswith("invoice."):
+        sub_id = _get_invoice_subscription_id(obj)
+        if sub_id:
+            try:
+                stripe_sub = stripe.Subscription.retrieve(sub_id)
+                return bool(_get_metadata(stripe_sub, "autoblogger_user_id"))
+            except Exception:
+                pass
+    return False
+
+
+async def _handle_autoblogger_subscription_update(
+    db: AsyncSession, stripe_sub
+) -> None:
+    """Handle subscription.created/updated for AutoBlogger."""
+    from app.billing.service import _get_metadata, _get_period, _ts_to_dt
+    from app.autoblogger.models import AutoBloggerSubscription, CreditBalance
+
+    user_id = _get_metadata(stripe_sub, "autoblogger_user_id")
+    plan = _get_metadata(stripe_sub, "autoblogger_plan") or "pro"
+
+    if not user_id:
+        logger.warning("AutoBlogger sub event missing user_id metadata: %s", stripe_sub.id)
+        return
+
+    stripe_sub_id = stripe_sub.id if hasattr(stripe_sub, "id") else stripe_sub.get("id")
+    stripe_status = stripe_sub.status if hasattr(stripe_sub, "status") else stripe_sub.get("status")
+    customer_id = stripe_sub.customer if hasattr(stripe_sub, "customer") else stripe_sub.get("customer")
+    cancel_at_end = stripe_sub.cancel_at_period_end if hasattr(stripe_sub, "cancel_at_period_end") else stripe_sub.get("cancel_at_period_end", False)
+    trial_start_ts = stripe_sub.trial_start if hasattr(stripe_sub, "trial_start") else stripe_sub.get("trial_start")
+    trial_end_ts = stripe_sub.trial_end if hasattr(stripe_sub, "trial_end") else stripe_sub.get("trial_end")
+
+    period_start, period_end = _get_period(stripe_sub)
+
+    # Find existing record
+    result = await db.execute(
+        select(AutoBloggerSubscription).where(
+            AutoBloggerSubscription.stripe_subscription_id == stripe_sub_id
+        )
+    )
+    ab_sub = result.scalar_one_or_none()
+
+    if ab_sub:
+        ab_sub.status = stripe_status
+        ab_sub.plan = plan
+        ab_sub.current_period_start = _ts_to_dt(period_start)
+        ab_sub.current_period_end = _ts_to_dt(period_end)
+        ab_sub.cancel_at_period_end = cancel_at_end
+        ab_sub.trial_start = _ts_to_dt(trial_start_ts) if trial_start_ts else None
+        ab_sub.trial_end = _ts_to_dt(trial_end_ts) if trial_end_ts else None
+    else:
+        ab_sub = AutoBloggerSubscription(
+            user_id=user_id,
+            stripe_subscription_id=stripe_sub_id,
+            stripe_customer_id=customer_id,
+            plan=plan,
+            status=stripe_status,
+            current_period_start=_ts_to_dt(period_start),
+            current_period_end=_ts_to_dt(period_end),
+            cancel_at_period_end=cancel_at_end,
+            trial_start=_ts_to_dt(trial_start_ts) if trial_start_ts else None,
+            trial_end=_ts_to_dt(trial_end_ts) if trial_end_ts else None,
+        )
+        db.add(ab_sub)
+
+    # If status becomes active (trial ended or payment succeeded), reset credits
+    if stripe_status == "active":
+        credits = {"pro": 50, "business": 9999}.get(plan, 5)
+        bal_result = await db.execute(
+            select(CreditBalance).where(CreditBalance.user_id == user_id)
+        )
+        balance = bal_result.scalar_one_or_none()
+        if balance:
+            balance.plan_credits_monthly = credits
+            balance.credits_remaining = credits
+            balance.last_reset_at = datetime.now(timezone.utc)
+
+    await db.flush()
+    logger.info("AutoBlogger subscription %s updated: status=%s plan=%s", stripe_sub_id, stripe_status, plan)
+
+
+async def _handle_autoblogger_subscription_deleted(
+    db: AsyncSession, stripe_sub
+) -> None:
+    """Handle subscription.deleted for AutoBlogger."""
+    from app.autoblogger.models import AutoBloggerSubscription
+
+    stripe_sub_id = stripe_sub.id if hasattr(stripe_sub, "id") else stripe_sub.get("id")
+
+    result = await db.execute(
+        select(AutoBloggerSubscription).where(
+            AutoBloggerSubscription.stripe_subscription_id == stripe_sub_id
+        )
+    )
+    ab_sub = result.scalar_one_or_none()
+    if ab_sub:
+        ab_sub.status = "canceled"
+        ab_sub.cancel_at_period_end = False
+        await db.flush()
+        logger.info("AutoBlogger subscription %s canceled", stripe_sub_id)
+
+
+async def _handle_autoblogger_invoice_paid(
+    db: AsyncSession, invoice
+) -> None:
+    """Handle invoice.payment_succeeded for AutoBlogger — record payment & reset credits."""
+    from app.billing.service import (
+        _get_invoice_payment_intent_id,
+        _get_invoice_subscription_id,
+        _get_user_by_customer_id,
+        _get_metadata,
+    )
+    from app.autoblogger.models import (
+        AutoBloggerPayment,
+        AutoBloggerSubscription,
+        CreditBalance,
+    )
+
+    customer_id = invoice.customer if hasattr(invoice, "customer") else invoice.get("customer")
+    user = await _get_user_by_customer_id(db, customer_id)
+    if not user:
+        logger.warning("AutoBlogger invoice paid — no user for customer %s", customer_id)
+        return
+
+    pi_id = _get_invoice_payment_intent_id(invoice)
+    sub_stripe_id = _get_invoice_subscription_id(invoice)
+
+    # Deduplicate
+    if pi_id:
+        existing = await db.execute(
+            select(AutoBloggerPayment).where(AutoBloggerPayment.stripe_payment_intent_id == pi_id)
+        )
+        if existing.scalar_one_or_none():
+            return
+
+    # Find AutoBlogger subscription
+    ab_sub = None
+    if sub_stripe_id:
+        result = await db.execute(
+            select(AutoBloggerSubscription).where(
+                AutoBloggerSubscription.stripe_subscription_id == sub_stripe_id
+            )
+        )
+        ab_sub = result.scalar_one_or_none()
+
+    amount = invoice.amount_paid if hasattr(invoice, "amount_paid") else invoice.get("amount_paid", 0)
+    currency = (invoice.currency if hasattr(invoice, "currency") else invoice.get("currency")) or "sek"
+    invoice_url = getattr(invoice, "hosted_invoice_url", None) or (invoice.get("hosted_invoice_url") if isinstance(invoice, dict) else None)
+    invoice_id = invoice.id if hasattr(invoice, "id") else invoice.get("id")
+
+    payment = AutoBloggerPayment(
+        user_id=user.id,
+        subscription_id=ab_sub.id if ab_sub else None,
+        stripe_payment_intent_id=pi_id,
+        stripe_invoice_id=invoice_id,
+        amount=amount,
+        currency=currency,
+        status="succeeded",
+        invoice_url=invoice_url,
+    )
+    db.add(payment)
+
+    # Reset monthly credits
+    if ab_sub:
+        plan = ab_sub.plan
+        credits = {"pro": 50, "business": 9999}.get(plan, 5)
+        bal_result = await db.execute(
+            select(CreditBalance).where(CreditBalance.user_id == user.id)
+        )
+        balance = bal_result.scalar_one_or_none()
+        if balance:
+            balance.plan_credits_monthly = credits
+            balance.credits_remaining = credits
+            balance.last_reset_at = datetime.now(timezone.utc)
+
+    await db.flush()
+    logger.info("AutoBlogger payment recorded for user %s (invoice %s)", user.id, invoice_id)

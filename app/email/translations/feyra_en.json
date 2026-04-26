@@ -1,0 +1,92 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 Feyra. All rights reserved.",
+    "sign_off": "\u2014 Feyra",
+    "default_user_name": "user",
+    "copy_link_prefix": "Or copy this link:",
+    "questions_reply": "Have questions? Reply to this email and we\u2019ll help you.",
+    "ignore_if_not_requested": "If you didn\u2019t request this, you can safely ignore this message."
+  },
+
+  "verification": {
+    "subject": "Verify your email address \u2014 Feyra",
+    "heading": "Verify your email address",
+    "greeting": "Hi {name},",
+    "body": "Thank you for creating an account with Feyra! Click the button below to verify your email address and activate your account. The link is valid for 24\u00a0hours.",
+    "cta": "Verify email",
+    "ignore": "If you didn\u2019t create an account, you can safely ignore this message."
+  },
+
+  "password_reset": {
+    "subject": "Reset your password \u2014 Feyra",
+    "heading": "Reset your password",
+    "greeting": "Hi {name},",
+    "body": "We received a request to reset the password for your Feyra account. Click the button below to choose a new password. The link is valid for 30\u00a0minutes.",
+    "cta": "Reset password"
+  },
+
+  "welcome": {
+    "subject": "Welcome to Feyra!",
+    "heading": "Welcome to Feyra!",
+    "greeting": "Hi {user_name},",
+    "body": "Thank you for signing up for Feyra! We\u2019re excited to help you manage your email outreach and lead generation.",
+    "info": "Get started by connecting your email accounts and importing your first leads. Feyra will handle the warmup and deliverability for you.",
+    "cta": "Get started"
+  },
+
+  "campaign_sent": {
+    "subject": "Campaign sent successfully \u2014 Feyra",
+    "heading": "Your campaign has been sent!",
+    "greeting": "Hi there,",
+    "body": "Your campaign \u201c{campaign_name}\u201d has been sent to {recipient_count} recipients.",
+    "info": "You can track opens, clicks, and replies in real time from your dashboard.",
+    "cta": "View campaign"
+  },
+
+  "lead_import_complete": {
+    "subject": "Lead import complete \u2014 Feyra",
+    "heading": "Lead import complete",
+    "greeting": "Hi there,",
+    "body": "Your lead import has been completed. {imported_count} leads were successfully imported.",
+    "info": "Duplicate and invalid entries were automatically skipped.",
+    "cta": "View leads"
+  },
+
+  "warmup_status": {
+    "subject": "Warmup status update \u2014 Feyra",
+    "heading": "Warmup status update",
+    "greeting": "Hi there,",
+    "body": "Your email account {email_account} warmup is {status}.",
+    "info_active": "Warmup is progressing well. Your sending reputation is building up gradually.",
+    "info_complete": "Warmup is complete! Your email account is ready for full-volume sending.",
+    "info_issue": "There was an issue with warmup. Please check your email account settings.",
+    "cta": "View warmup status"
+  },
+
+  "payment_confirmation": {
+    "subject": "Payment confirmed \u2014 Feyra",
+    "heading": "Payment confirmed",
+    "greeting": "Hi there,",
+    "body": "Your payment of {amount} has been successfully processed. Thank you for your subscription to Feyra.",
+    "info": "Your next billing date is {next_billing_date}. You can manage your subscription at any time from the dashboard.",
+    "cta": "Go to dashboard"
+  },
+
+  "payment_failed": {
+    "subject": "Payment failed \u2014 Feyra",
+    "heading": "Payment could not be processed",
+    "greeting": "Hi there,",
+    "body": "We were unable to process your latest Feyra subscription payment. Please update your payment method to avoid service interruption.",
+    "warning": "If the payment is not resolved within 7\u00a0days, your subscription will be paused.",
+    "cta": "Update payment method"
+  },
+
+  "trial_ending": {
+    "subject": "Your Feyra trial ends in 3 days",
+    "heading": "Your trial is ending soon",
+    "greeting": "Hi there,",
+    "body": "Your Feyra trial ends on {trial_end_date}. Upgrade now to keep using all features without interruption.",
+    "info": "After the trial, your campaigns and warmup will be paused.",
+    "cta": "Upgrade now"
+  }
+}

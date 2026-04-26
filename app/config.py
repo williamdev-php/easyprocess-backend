@@ -1,4 +1,8 @@
+import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -45,6 +49,14 @@ class Settings(BaseSettings):
     RESEND_WEBHOOK_SECRET: str = ""
     RESEND_INBOUND_WEBHOOK_SECRET: str = ""
 
+    # AutoBlogger email sender
+    AUTOBLOGGER_MAIL_FROM_EMAIL: str = "noreply@autoblogger.se"
+    AUTOBLOGGER_MAIL_FROM_NAME: str = "AutoBlogger"
+
+    # Feyra email sender
+    FEYRA_MAIL_FROM_EMAIL: str = "noreply@feyra.se"
+    FEYRA_MAIL_FROM_NAME: str = "Feyra"
+
     # AI (for site generation)
     ANTHROPIC_API_KEY: str = ""
     AI_MODEL: str = "claude-haiku-4-5-20251001"  # cheap default for lead generation
@@ -60,6 +72,12 @@ class Settings(BaseSettings):
 
     # Frontend URL (for email links)
     FRONTEND_URL: str = "http://localhost:3000"
+
+    # AutoBlogger frontend URL
+    AUTOBLOGGER_FRONTEND_URL: str = "http://localhost:3002"
+
+    # Feyra frontend URL
+    FEYRA_FRONTEND_URL: str = "http://localhost:3005"
 
     # Email addresses
     EMAIL_WILLIAM: str = "william@qvicko.com"
@@ -100,12 +118,27 @@ class Settings(BaseSettings):
     STRIPE_CONNECT_WEBHOOK_SECRET: str = ""
     PLATFORM_FEE_PERCENT: float = 0.2  # Platform fee percentage per transaction (0.2%)
 
+    # AutoBlogger Stripe Plans (same Stripe account, different price IDs)
+    STRIPE_AUTOBLOGGER_PRO_PRICE_ID: str = ""
+    STRIPE_AUTOBLOGGER_BUSINESS_PRICE_ID: str = ""
+
+    # Feyra encryption key (Fernet key for IMAP/SMTP password encryption)
+    FEYRA_ENCRYPTION_KEY: str = ""
+
+    # AutoBlogger encryption key (Fernet key for platform_config secrets: Shopify tokens, WP passwords)
+    AUTOBLOGGER_ENCRYPTION_KEY: str = ""
+
+    # Shopify OAuth
+    SHOPIFY_API_KEY: str = ""
+    SHOPIFY_API_SECRET: str = ""
+    SHOPIFY_SCOPES: str = "write_content,read_content"  # For blog posts
+
     # Viewer
     VIEWER_URL: str = "http://localhost:3001"
     REVALIDATION_SECRET: str = ""
 
     # CORS
-    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3005"
 
     @property
     def effective_database_url(self) -> str:
@@ -116,7 +149,12 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins_list(self) -> list[str]:
-        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+        origins = [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+        # Ensure product frontend URLs are always included in CORS origins
+        for url in (self.FRONTEND_URL, self.AUTOBLOGGER_FRONTEND_URL, self.FEYRA_FRONTEND_URL):
+            if url and url not in origins:
+                origins.append(url)
+        return origins
 
     @property
     def supabase_storage_url(self) -> str:
@@ -143,6 +181,19 @@ class Settings(BaseSettings):
         if missing:
             raise RuntimeError(
                 f"FATAL: Missing required env vars for production: {', '.join(missing)}"
+            )
+
+        # AutoBlogger-specific production requirements
+        ab_required = {
+            "AUTOBLOGGER_ENCRYPTION_KEY": self.AUTOBLOGGER_ENCRYPTION_KEY,
+            "STRIPE_AUTOBLOGGER_PRO_PRICE_ID": self.STRIPE_AUTOBLOGGER_PRO_PRICE_ID,
+            "STRIPE_AUTOBLOGGER_BUSINESS_PRICE_ID": self.STRIPE_AUTOBLOGGER_BUSINESS_PRICE_ID,
+        }
+        ab_missing = [k for k, v in ab_required.items() if not v]
+        if ab_missing:
+            logger.warning(
+                "AutoBlogger: missing recommended env vars for production: %s",
+                ", ".join(ab_missing),
             )
 
 

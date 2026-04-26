@@ -1,0 +1,132 @@
+{
+  "common": {
+    "footer_rights": "\u00a9 2026 AutoBlogger. Alla r\u00e4ttigheter f\u00f6rbeh\u00e5llna.",
+    "sign_off": "\u2014 AutoBlogger",
+    "default_user_name": "anv\u00e4ndare",
+    "copy_link_prefix": "Eller kopiera denna l\u00e4nk:",
+    "questions_reply": "Har du fr\u00e5gor? Svara p\u00e5 detta mail s\u00e5 hj\u00e4lper vi dig.",
+    "ignore_if_not_requested": "Om du inte beg\u00e4rde detta kan du ignorera detta meddelande.",
+    "unsubscribe": "Du f\u00e5r detta mail f\u00f6r att du prenumererar p\u00e5 AutoBlogger-uppdateringar. {link_start}Avprenumerera{link_end}."
+  },
+
+  "verification": {
+    "subject": "Verifiera din e-postadress \u2014 AutoBlogger",
+    "heading": "Verifiera din e-postadress",
+    "greeting": "Hej {name},",
+    "body": "Tack f\u00f6r att du skapade ett konto hos AutoBlogger! Klicka p\u00e5 knappen nedan f\u00f6r att verifiera din e-postadress och aktivera ditt konto. L\u00e4nken \u00e4r giltig i 24\u00a0timmar.",
+    "cta": "Verifiera e-post",
+    "ignore": "Om du inte skapade ett konto kan du ignorera detta meddelande."
+  },
+
+  "password_reset": {
+    "subject": "\u00c5terst\u00e4ll ditt l\u00f6senord \u2014 AutoBlogger",
+    "heading": "\u00c5terst\u00e4ll ditt l\u00f6senord",
+    "greeting": "Hej {name},",
+    "body": "Vi har f\u00e5tt en beg\u00e4ran om att \u00e5terst\u00e4lla l\u00f6senordet f\u00f6r ditt AutoBlogger-konto. Klicka p\u00e5 knappen nedan f\u00f6r att v\u00e4lja ett nytt l\u00f6senord. L\u00e4nken \u00e4r giltig i 30\u00a0minuter.",
+    "cta": "\u00c5terst\u00e4ll l\u00f6senord"
+  },
+
+  "payment_confirmation": {
+    "subject": "Betalning bekr\u00e4ftad \u2014 AutoBlogger",
+    "heading": "Betalning bekr\u00e4ftad",
+    "greeting": "Hej,",
+    "body": "Din betalning p\u00e5 {amount} har genomf\u00f6rts. Tack f\u00f6r din fortsatta prenumeration p\u00e5 AutoBlogger.",
+    "info": "N\u00e4sta faktureringsdatum \u00e4r {next_billing_date}. Du kan hantera din prenumeration n\u00e4r som helst fr\u00e5n kontrollpanelen.",
+    "cta": "G\u00e5 till kontrollpanelen"
+  },
+
+  "plan_change": {
+    "subject": "Plan \u00e4ndrad \u2014 AutoBlogger",
+    "heading": "Din plan har uppdaterats",
+    "greeting": "Hej,",
+    "body": "Din AutoBlogger-prenumeration har \u00e4ndrats fr\u00e5n {old_plan} till {new_plan}.",
+    "info": "\u00c4ndringen tr\u00e4der i kraft omedelbart. Din nya kreditm\u00e4ngd och funktioner \u00e4r nu aktiva.",
+    "cta": "G\u00e5 till kontrollpanelen"
+  },
+
+  "post_generated": {
+    "subject": "Ditt inl\u00e4gg \u00e4r klart \u2014 {post_title}",
+    "heading": "Ditt blogginl\u00e4gg \u00e4r klart!",
+    "greeting": "Hej,",
+    "body": "Ditt blogginl\u00e4gg \u201c{post_title}\u201d har genererats och \u00e4r redo f\u00f6r granskning.",
+    "cta": "Visa inl\u00e4gg",
+    "note": "Du kan redigera inl\u00e4gget innan du publicerar det p\u00e5 din blogg."
+  },
+
+  "post_failed": {
+    "subject": "Generering misslyckades \u2014 {post_title}",
+    "heading": "Generering av inl\u00e4gg misslyckades",
+    "greeting": "Hej,",
+    "body": "Tyv\u00e4rr kunde blogginl\u00e4gget \u201c{post_title}\u201d inte genereras.",
+    "error_label": "Fel:",
+    "cta": "F\u00f6rs\u00f6k igen",
+    "note": "Kontakta supporten om problemet kvarst\u00e5r."
+  },
+
+  "post_review": {
+    "subject": "Inl\u00e4gg v\u00e4ntar p\u00e5 granskning \u2014 {post_title}",
+    "heading": "Ett inl\u00e4gg v\u00e4ntar p\u00e5 din granskning",
+    "greeting": "Hej,",
+    "body": "Blogginl\u00e4gget \u201c{post_title}\u201d har genererats och v\u00e4ntar p\u00e5 ditt godk\u00e4nnande innan publicering.",
+    "cta_approve": "Godk\u00e4nn inl\u00e4gg",
+    "cta_decline": "Avvisa",
+    "note": "Granska inl\u00e4gget och godk\u00e4nn f\u00f6r att publicera, eller avvisa f\u00f6r att f\u00f6rkasta det."
+  },
+
+  "weekly_summary": {
+    "subject": "Din veckosammanfattning fr\u00e5n AutoBlogger",
+    "heading": "Veckosammanfattning",
+    "greeting": "Hej,",
+    "body": "H\u00e4r \u00e4r en sammanfattning av din AutoBlogger-aktivitet denna vecka.",
+    "posts_generated_label": "Inl\u00e4gg genererade",
+    "posts_published_label": "Inl\u00e4gg publicerade",
+    "credits_used_label": "Krediter anv\u00e4nda",
+    "credits_remaining_label": "Krediter kvar",
+    "cta": "G\u00e5 till kontrollpanelen"
+  },
+
+  "credits_low": {
+    "subject": "Krediterna b\u00f6rjar ta slut \u2014 AutoBlogger",
+    "heading": "Dina krediter b\u00f6rjar ta slut",
+    "greeting": "Hej,",
+    "body": "Du har {credits_remaining} av {total_credits} krediter kvar. I denna takt kan de ta slut snart.",
+    "info": "Uppgradera din plan eller k\u00f6p fler krediter f\u00f6r att forts\u00e4tta generera blogginl\u00e4gg utan avbrott.",
+    "cta": "Hantera krediter"
+  },
+
+  "credits_exhausted": {
+    "subject": "Krediterna \u00e4r slut \u2014 AutoBlogger",
+    "heading": "Dina krediter \u00e4r slut",
+    "greeting": "Hej,",
+    "body": "Ditt AutoBlogger-kreditsaldo har n\u00e5tt noll. Inga fler blogginl\u00e4gg kan genereras f\u00f6rr\u00e4n du l\u00e4gger till krediter.",
+    "warning": "Schemalagda inl\u00e4gg pausas tills krediter finns tillg\u00e4ngliga.",
+    "cta": "Uppgradera plan"
+  },
+
+  "ab_trial_ending": {
+    "subject": "Din AutoBlogger-provperiod slutar om 3 dagar",
+    "heading": "Din provperiod slutar snart",
+    "greeting": "Hej,",
+    "body": "Din AutoBlogger-provperiod slutar {trial_end_date}. Uppgradera nu f\u00f6r att forts\u00e4tta generera blogginl\u00e4gg automatiskt.",
+    "info": "Efter provperioden pausas dina schemalagda inl\u00e4gg och inga nya inl\u00e4gg genereras.",
+    "cta": "Uppgradera nu"
+  },
+
+  "ab_payment_failed": {
+    "subject": "Betalningen misslyckades \u2014 AutoBlogger",
+    "heading": "Betalningen kunde inte genomf\u00f6ras",
+    "greeting": "Hej,",
+    "body": "Vi kunde inte genomf\u00f6ra din senaste AutoBlogger-prenumerationsbetalning. Uppdatera din betalningsmetod f\u00f6r att undvika avbrott i tj\u00e4nsten.",
+    "warning": "Om betalningen inte l\u00f6ses inom 7\u00a0dagar pausas din prenumeration.",
+    "cta": "Uppdatera betalningsmetod"
+  },
+
+  "ab_welcome": {
+    "subject": "V\u00e4lkommen till AutoBlogger!",
+    "heading": "V\u00e4lkommen till AutoBlogger!",
+    "greeting": "Hej {user_name},",
+    "body": "Tack f\u00f6r att du registrerade dig f\u00f6r AutoBlogger! Vi \u00e4r glada att hj\u00e4lpa dig skapa h\u00f6gkvalitativt blogginneh\u00e5ll automatiskt.",
+    "info": "Kom ig\u00e5ng genom att l\u00e4gga till din f\u00f6rsta k\u00e4lla och konfigurera dina blogginst\u00e4llningar. AutoBlogger sk\u00f6ter resten.",
+    "cta": "Kom ig\u00e5ng"
+  }
+}

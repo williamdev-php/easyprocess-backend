@@ -10,12 +10,14 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
 
+from app.autoblogger.exceptions import AutoBloggerError, autoblogger_exception_handler
+
 from sqlalchemy import text
 
 from app.cache import cache
 from app.config import settings
 from app.rate_limit import limiter
-from app.database import engine, async_session, Base, SCHEMA
+from app.database import engine, async_session, get_db_session, Base, SCHEMA
 
 # Import all models so Base.metadata knows about them
 from app.auth.models import User, Session, AuditLog, SocialAccount, SettingsAuditLog, SuperuserPromotion  # noqa: F401
@@ -28,6 +30,9 @@ from app.support.models import SupportTicket  # noqa: F401
 from app.support.notifications import Notification  # noqa: F401
 from app.apps.models import App, AppInstallation, AppReview, BlogPost, BlogCategory, ChatConversation, ChatMessage, BookingService, BookingFormField, BookingPaymentMethods, Booking  # noqa: F401
 from app.payments.models import ConnectedAccount, PlatformPayment  # noqa: F401
+from app.oauth.models import OAuthAuthorizationCode, OAuthAccessToken  # noqa: F401
+from app.autoblogger.models import Source, BlogPostAB, ContentSchedule, UserSettings, CreditBalance, CreditTransaction, AutoBloggerBase, AUTOBLOGGER_SCHEMA, AutoBloggerSubscription, AutoBloggerPayment, AnalyticsEvent, AutoBloggerUser, AutoBloggerSession, AutoBloggerAuditLog, AutoBloggerSocialAccount, AutoBloggerPasswordResetToken, AutoBloggerEmailVerificationToken  # noqa: F401
+from app.feyra.models import FeyraBase, FEYRA_SCHEMA, EmailAccount, WarmupSettings, WarmupEmail, Lead as FeyraLead, CrawlJob, CrawlResult, Campaign, CampaignStep, CampaignLead, SentEmail, GlobalSettings  # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +50,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             raise RuntimeError("Cannot connect to database") from e
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)
+        # AutoBlogger schema
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AUTOBLOGGER_SCHEMA}"))
+        await conn.run_sync(AutoBloggerBase.metadata.create_all)
+        # Feyra schema
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {FEYRA_SCHEMA}"))
+        await conn.run_sync(FeyraBase.metadata.create_all)
 
     # Verify Supabase Storage connectivity
     if settings.SUPABASE_URL:
@@ -160,12 +171,279 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Smartlead sync disabled — SMARTLEAD_API_KEY not configured")
 
+    # AutoBlogger: monthly credit reset check (every 6 hours)
+    async def _credit_reset_loop():
+        from app.autoblogger.credits import reset_monthly_credits
+        await asyncio.sleep(120)  # Initial delay
+        while True:
+            try:
+                async with get_db_session() as db:
+                    count = await reset_monthly_credits(db)
+                    if count > 0:
+                        logger.info("AutoBlogger: reset credits for %d users", count)
+            except Exception:
+                logger.exception("AutoBlogger credit reset failed")
+            await asyncio.sleep(21600)  # 6 hours
+
+    credit_reset_task = asyncio.create_task(_credit_reset_loop())
+
+    # AutoBlogger: schedule execution worker (every 60 seconds)
+    async def _schedule_execution_loop():
+        from app.autoblogger.models import ContentSchedule, BlogPostAB, PostStatus, Source, UserSettings
+        from app.autoblogger.generator import generate_blog_post
+        from app.autoblogger.images import generate_featured_image
+        from app.autoblogger.credits import validate_credits, deduct_credits, calculate_credits_for_post
+        from app.autoblogger.scheduler import calculate_next_run_at
+        from sqlalchemy import select, and_
+        import random
+
+        await asyncio.sleep(30)  # Initial delay
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                async with get_db_session() as db:
+                    # Find due schedules
+                    result = await db.execute(
+                        select(ContentSchedule).where(
+                            and_(
+                                ContentSchedule.is_active.is_(True),
+                                ContentSchedule.next_run_at <= now,
+                            )
+                        )
+                    )
+                    due_schedules = result.scalars().all()
+
+                    for schedule in due_schedules:
+                        try:
+                            # Fetch source for brand_voice
+                            src_result = await db.execute(
+                                select(Source).where(Source.id == schedule.source_id)
+                            )
+                            source = src_result.scalar_one_or_none()
+                            if not source or not source.is_active:
+                                logger.warning("Schedule %s: source not found or inactive", schedule.id)
+                                continue
+
+                            # Fetch user settings
+                            settings_result = await db.execute(
+                                select(UserSettings).where(UserSettings.user_id == schedule.user_id)
+                            )
+                            user_settings = settings_result.scalar_one_or_none()
+                            ai_model = user_settings.ai_model if user_settings else "claude-sonnet-4-20250514"
+                            auto_publish = schedule.auto_publish
+                            image_gen = user_settings.image_generation if user_settings else True
+
+                            # Generate posts_per_day posts
+                            successful_posts = 0
+                            for i in range(schedule.posts_per_day):
+                                # Pick a topic from the schedule's topic list (cycle through)
+                                topic = None
+                                if schedule.topics:
+                                    topic = schedule.topics[(schedule.posts_generated + i) % len(schedule.topics)]
+                                else:
+                                    topic = f"Blog post for {source.name}"
+
+                                keywords = schedule.keywords or []
+
+                                # Check credits
+                                try:
+                                    await validate_credits(db, schedule.user_id)
+                                except Exception:
+                                    logger.warning("Schedule %s: user %s has insufficient credits", schedule.id, schedule.user_id)
+                                    break
+
+                                # Create post record
+                                post = BlogPostAB(
+                                    source_id=schedule.source_id,
+                                    user_id=schedule.user_id,
+                                    title=topic,
+                                    language=schedule.language,
+                                    status=PostStatus.GENERATING,
+                                )
+                                db.add(post)
+                                await db.flush()
+
+                                try:
+                                    gen_result = await generate_blog_post(
+                                        topic=topic,
+                                        keywords=keywords,
+                                        language=schedule.language,
+                                        brand_voice=source.brand_voice,
+                                        ai_model=ai_model,
+                                    )
+
+                                    # Optional image
+                                    featured_url = None
+                                    if image_gen:
+                                        featured_url = await generate_featured_image(
+                                            title=gen_result.title,
+                                            keywords=keywords,
+                                            brand_images=source.brand_images,
+                                        )
+
+                                    post.title = gen_result.title
+                                    post.slug = gen_result.slug
+                                    post.content = gen_result.content
+                                    post.excerpt = gen_result.excerpt
+                                    post.meta_title = gen_result.meta_title
+                                    post.meta_description = gen_result.meta_description
+                                    post.tags = gen_result.tags
+                                    post.schema_markup = gen_result.schema_markup
+                                    post.internal_links = gen_result.internal_links
+                                    post.generation_prompt = gen_result.generation_prompt
+                                    post.target_keyword = keywords[0] if keywords else None
+                                    post.ai_model = gen_result.ai_model
+                                    post.word_count = gen_result.word_count
+                                    post.reading_time_minutes = gen_result.reading_time_minutes
+                                    post.featured_image_url = featured_url
+
+                                    credits = calculate_credits_for_post(gen_result.word_count)
+                                    await deduct_credits(
+                                        db, schedule.user_id, credits,
+                                        description=f"Scheduled post: {gen_result.title[:100]}",
+                                        post_id=post.id,
+                                    )
+                                    post.credits_used = credits
+
+                                    post.status = PostStatus.PUBLISHED if auto_publish else PostStatus.REVIEW
+                                    if auto_publish:
+                                        post.published_at = datetime.now(timezone.utc)
+                                    post.updated_at = datetime.now(timezone.utc)
+
+                                    logger.info("Schedule %s: generated post '%s'", schedule.id, gen_result.title)
+                                    successful_posts += 1
+
+                                    # Track POST_GENERATED analytics event
+                                    from app.autoblogger.analytics import track_event
+                                    from app.autoblogger.models import AnalyticsEventType
+                                    await track_event(db, schedule.user_id, AnalyticsEventType.POST_GENERATED, {
+                                        "post_id": post.id,
+                                        "model": gen_result.ai_model,
+                                        "language": schedule.language,
+                                        "word_count": gen_result.word_count,
+                                        "credits_used": credits,
+                                        "scheduled": True,
+                                        "schedule_id": schedule.id,
+                                    })
+
+                                except Exception as gen_err:
+                                    post.status = PostStatus.FAILED
+                                    post.error_message = str(gen_err)
+                                    post.updated_at = datetime.now(timezone.utc)
+                                    logger.exception("Schedule %s: post generation failed", schedule.id)
+
+                                    # Track GENERATION_FAILED analytics event
+                                    from app.autoblogger.analytics import track_event as track_fail
+                                    from app.autoblogger.models import AnalyticsEventType as AET
+                                    await track_fail(db, schedule.user_id, AET.GENERATION_FAILED, {
+                                        "post_id": post.id,
+                                        "error": str(gen_err)[:500],
+                                        "schedule_id": schedule.id,
+                                    })
+
+                            # Track SCHEDULE_EXECUTED analytics event
+                            from app.autoblogger.analytics import track_event as track_sched
+                            from app.autoblogger.models import AnalyticsEventType as AET2
+                            await track_sched(db, schedule.user_id, AET2.SCHEDULE_EXECUTED, {
+                                "schedule_id": schedule.id,
+                                "posts_attempted": schedule.posts_per_day,
+                                "posts_succeeded": successful_posts,
+                                "success": successful_posts > 0,
+                            })
+
+                            # Update schedule
+                            schedule.last_run_at = datetime.now(timezone.utc)
+                            schedule.next_run_at = calculate_next_run_at(
+                                frequency=schedule.frequency,
+                                preferred_time=schedule.preferred_time,
+                                timezone_str=schedule.timezone,
+                                days_of_week=schedule.days_of_week,
+                                last_run_at=schedule.last_run_at,
+                            )
+                            schedule.posts_generated += successful_posts
+                            schedule.updated_at = datetime.now(timezone.utc)
+                            await db.flush()
+
+                        except Exception:
+                            logger.exception("Schedule %s execution failed", schedule.id)
+
+            except Exception:
+                logger.exception("Schedule execution loop error")
+            await asyncio.sleep(60)  # Check every 60 seconds
+
+    schedule_worker_task = asyncio.create_task(_schedule_execution_loop())
+
+    # AutoBlogger: stuck generation recovery (every 5 minutes)
+    async def _ab_stuck_recovery_loop():
+        from app.autoblogger.models import BlogPostAB, PostStatus, ContentSchedule
+        from app.autoblogger.scheduler import calculate_next_run_at
+        from sqlalchemy import select, and_
+
+        await asyncio.sleep(300)  # Initial delay: 5 min
+        while True:
+            try:
+                threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
+                schedule_threshold = datetime.now(timezone.utc) - timedelta(hours=1)
+
+                async with get_db_session() as db:
+                    # Posts stuck in GENERATING > 10 min
+                    result = await db.execute(
+                        select(BlogPostAB).where(
+                            and_(
+                                BlogPostAB.status == PostStatus.GENERATING,
+                                BlogPostAB.updated_at < threshold,
+                            )
+                        )
+                    )
+                    stuck_posts = result.scalars().all()
+                    if stuck_posts:
+                        for post in stuck_posts:
+                            post.status = PostStatus.FAILED
+                            post.error_message = "Generation timed out (stuck recovery)"
+                            post.updated_at = datetime.now(timezone.utc)
+                            logger.warning("AutoBlogger: recovered stuck post %s", post.id)
+                        logger.info("AutoBlogger: recovered %d stuck posts", len(stuck_posts))
+
+                    # Schedules with next_run_at > 1 hour in the past
+                    result = await db.execute(
+                        select(ContentSchedule).where(
+                            and_(
+                                ContentSchedule.is_active.is_(True),
+                                ContentSchedule.next_run_at.isnot(None),
+                                ContentSchedule.next_run_at < schedule_threshold,
+                            )
+                        )
+                    )
+                    stale_schedules = result.scalars().all()
+                    if stale_schedules:
+                        for sched in stale_schedules:
+                            sched.next_run_at = calculate_next_run_at(
+                                frequency=sched.frequency,
+                                preferred_time=sched.preferred_time,
+                                timezone_str=sched.timezone,
+                                days_of_week=sched.days_of_week,
+                                last_run_at=sched.last_run_at,
+                            )
+                            sched.updated_at = datetime.now(timezone.utc)
+                            logger.warning("AutoBlogger: recalculated next_run_at for schedule %s", sched.id)
+                        logger.info("AutoBlogger: fixed %d stale schedules", len(stale_schedules))
+
+                    await db.flush()
+            except Exception:
+                logger.exception("AutoBlogger stuck recovery failed")
+            await asyncio.sleep(300)  # Every 5 minutes
+
+    ab_stuck_task = asyncio.create_task(_ab_stuck_recovery_loop())
+
     yield
 
     # Graceful shutdown: cancel background tasks and let in-flight work drain.
     expiration_task.cancel()
     stuck_recovery_task.cancel()
-    tasks_to_cancel = [expiration_task, stuck_recovery_task]
+    credit_reset_task.cancel()
+    schedule_worker_task.cancel()
+    ab_stuck_task.cancel()
+    tasks_to_cancel = [expiration_task, stuck_recovery_task, credit_reset_task, schedule_worker_task, ab_stuck_task]
     if smartlead_task is not None:
         smartlead_task.cancel()
         tasks_to_cancel.append(smartlead_task)
@@ -174,9 +452,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await task
         except asyncio.CancelledError:
             pass
-    # Close shared httpx client used by AI generator
+    # Close shared httpx clients
     from app.ai.generator import close_http_client
     await close_http_client()
+    from app.autoblogger.generator import close_http_client as close_ab_gen_client
+    from app.autoblogger.images import close_http_client as close_ab_img_client
+    from app.autoblogger.integrations.shopify import close_http_client as close_shopify_client
+    await close_ab_gen_client()
+    await close_ab_img_client()
+    await close_shopify_client()
     await cache.close()
     await engine.dispose()
     logger.info("Shutdown complete")
@@ -204,7 +488,26 @@ app.add_middleware(
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(AutoBloggerError, autoblogger_exception_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+# Request logging middleware — log AutoBlogger API requests with response times
+@app.middleware("http")
+async def log_autoblogger_requests(request, call_next):
+    import time as _time
+    path = request.url.path
+    if path.startswith("/api/autoblogger"):
+        start = _time.monotonic()
+        response = await call_next(request)
+        duration_ms = round((_time.monotonic() - start) * 1000, 1)
+        logger.info(
+            "AutoBlogger API: method=%s path=%s status=%d duration_ms=%.1f",
+            request.method, path, response.status_code, duration_ms,
+        )
+        return response
+    return await call_next(request)
+
 
 # REST routes
 from app.auth.router import router as auth_router  # noqa: E402
@@ -217,6 +520,18 @@ from app.tracking.router import router as tracking_router  # noqa: E402
 from app.apps.router import router as apps_router  # noqa: E402
 from app.gsc.router import router as gsc_router  # noqa: E402
 from app.payments.router import router as payments_router  # noqa: E402
+from app.autoblogger.router import router as autoblogger_router  # noqa: E402
+from app.autoblogger.api import router as autoblogger_api_router  # noqa: E402
+from app.autoblogger.billing import router as autoblogger_billing_router  # noqa: E402
+from app.autoblogger.integrations.shopify_router import router as shopify_router  # noqa: E402
+from app.autoblogger.integrations.qvicko_router import router as qvicko_router  # noqa: E402
+from app.autoblogger.integrations.wordpress_router import router as wordpress_router  # noqa: E402
+from app.feyra.router import router as feyra_router  # noqa: E402
+from app.feyra.api import router as feyra_api_router  # noqa: E402
+from app.autoblogger.analytics import router as autoblogger_analytics_router  # noqa: E402
+from app.autoblogger.health import router as autoblogger_health_router  # noqa: E402
+from app.oauth.router import router as oauth_router  # noqa: E402
+from app.oauth.blog_api import router as oauth_blog_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -228,6 +543,18 @@ app.include_router(tracking_router)
 app.include_router(apps_router)
 app.include_router(gsc_router)
 app.include_router(payments_router)
+app.include_router(autoblogger_router)
+app.include_router(autoblogger_api_router)
+app.include_router(autoblogger_billing_router)
+app.include_router(autoblogger_analytics_router)
+app.include_router(autoblogger_health_router)
+app.include_router(shopify_router)
+app.include_router(qvicko_router)
+app.include_router(wordpress_router)
+app.include_router(oauth_router)
+app.include_router(oauth_blog_router)
+app.include_router(feyra_router)
+app.include_router(feyra_api_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402
