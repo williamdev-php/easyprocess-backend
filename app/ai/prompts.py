@@ -58,11 +58,14 @@ REGLER:
 7b. Inkludera en "section_order"-nyckel med ENBART de sektioner du valt, i optimal visningsordning. Anpassa ordningen efter bransch.
 8. CTA-KNAPPAR & LÄNKAR — VIKTIGT:
    - Bestäm FÖRST vilka pages du ska skapa (slug-lista). Sedan använd de slugsen som href i knappar.
-   - Om du skapar en kontaktsida med slug "kontakt" → alla CTA-knappar ska peka till "/kontakt" (INTE "#contact").
-   - Om du skapar en tjänstesida med slug "tjanster" → "Se våra tjänster"-knappar ska peka till "/tjanster".
-   - Alla href i CTA-knappar MÅSTE matcha en faktisk page-slug eller vara en extern URL.
-   - Använd ALDRIG "#contact" eller andra ankarlänkar. Använd alltid riktiga sidreferenser som "/kontakt".
-   - Kontrollera att VARJE href i hela JSON:en pekar till en sida som faktiskt finns i pages-arrayen.
+   - Alla href i CTA-knappar MÅSTE använda page-slug med slash-prefix, eller vara en extern URL.
+   - Om du skapar en custom page med slug "om-oss" → href ska vara "/om-oss".
+   - Om du skapar en custom page med slug "tjanster" → href ska vara "/tjanster".
+   - Om kontaktsidan använder STANDARD-mallen (top-level contact, ej custom page) → href ska vara "/contact" (engelska route).
+   - STANDARD-ROUTES (engelska, alltid tillgängliga): "/about", "/services", "/gallery", "/faq", "/contact", "/blog", "/bookings".
+   - Custom pages använder sin egen slug: "/om-oss", "/tjanster", etc.
+   - Använd ALDRIG "#contact" eller andra ankarlänkar (#). Använd alltid riktiga sidreferenser.
+   - Kontrollera att VARJE href i hela JSON:en pekar till en sida som faktiskt finns (antingen en custom page eller standard-route).
 9. Generera 4-6 services om företaget har tjänster.
 10. Generera 3-5 features/fördelar.
 11. Generera 3-4 stats/nyckeltal med realistiska värden.
@@ -72,6 +75,7 @@ REGLER:
 15. SEO: Generera BARA title och description i meta. Skippa structured_data och robots — det genereras automatiskt senare.
 16. Använd BARA bild-URL:er som finns i listan med tillgängliga bilder. Hitta INTE PÅ nya URL:er.
 17. STYLE VARIANT: Sidan tilldelas automatiskt en slumpmässig visuell stilvariant (style_variant) EFTER din generering — du behöver INTE ange den.
+18. LOGOTYP: Om logo_url är tom eller saknas i företagsdatan → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp. Logotypen visas i headern — om den inte finns visas företagsnamnet som text istället, vilket är bättre än en felaktig bild.
 
 SECTION_SETTINGS — per-sektion animation:
 Inkludera "section_settings" i din JSON. Variera animationer mellan sektioner.
@@ -665,9 +669,11 @@ REGLER:
 3. Alla texter på svenska om inte annat anges. Skriv KORTFATTAT — varje mening ska ha ett syfte.
 4. Inkludera "section_settings" med varierade animationer: "fade-up", "fade-in", "slide-left", "slide-right", "scale", "none". Hero: "fade-in" eller "none".
 5. Inkludera INTE navigation eller footer — det genereras automatiskt.
-6. CTA-knappar: href MÅSTE matcha en page-slug (t.ex. "/kontakt") eller vara extern URL. Använd ALDRIG ankarlänkar (#contact).
-7. Skapa 2-4 undersidor via "pages". Startsidan = korta snippets, undersidor = fullständigt innehåll.
+6. CTA-knappar: href MÅSTE matcha en page-slug (t.ex. "/om-oss") eller standard-route ("/contact", "/about", "/services", "/gallery", "/faq"). Använd ALDRIG ankarlänkar (#contact).
+7. Skapa 2-4 undersidor via "pages". Startsidan = korta snippets, undersidor = fullständigt innehåll. Om du skapar en page som ersätter en standard-sektion (about, services, gallery, faq), sätt den top-level sektionen till null.
 8. SEO: Generera BARA title och description i meta.
+9. LOGOTYP: Om logotyp-URL är tom eller saknas → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp.
+10. Page-titlar ska vara KORTA (max 2-3 ord): "Om oss", "Tjänster", etc. ALDRIG med företagsnamn.
 
 {compact_schema}"""
 

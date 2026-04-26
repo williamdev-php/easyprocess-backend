@@ -264,34 +264,52 @@ def _build_slug_to_section_map() -> dict[str, str]:
 
 _PAGE_SLUG_TO_SECTION = _build_slug_to_section_map()
 
+# Fuzzy keywords: if a page slug contains any of these, it covers the section.
+_SECTION_FUZZY_KEYWORDS: dict[str, list[str]] = {
+    "about": ["om-oss", "om-", "about"],
+    "services": ["tjanst", "service"],
+    "gallery": ["galler", "portfolio"],
+    "faq": ["faq", "fragor"],
+    "contact": ["kontakt", "contact"],
+}
+
 
 def _deduplicate_pages_vs_sections(site_data: dict) -> None:
     """Null out top-level sections when a custom page covers the same topic.
 
-    This prevents duplicate navigation entries (e.g. standard "Om oss" link
-    AND a custom "Om oss" page link).  The custom page is always preferred
-    because it contains richer, site-specific content.
-
-    Contact is intentionally excluded — the standard contact template is the
-    default, and custom contact pages are opt-in.
+    The custom page is always preferred because it contains richer,
+    site-specific content.  Uses exact slug match first, then fuzzy keyword
+    match as fallback.
     """
     pages = site_data.get("pages")
     if not isinstance(pages, list) or not pages:
         return
 
-    page_slugs = {
-        p.get("slug")
+    top_level_slugs = [
+        p.get("slug", "")
         for p in pages
         if isinstance(p, dict) and not p.get("parent_slug")
-    }
+    ]
 
-    for slug in page_slugs:
-        section_key = _PAGE_SLUG_TO_SECTION.get(slug)
-        if section_key and site_data.get(section_key) is not None:
-            logger.info(
-                "Dedup: custom page '%s' covers section '%s' — nulling section",
-                slug, section_key,
-            )
+    # For each standard section, check if ANY custom page covers it
+    for section_key in ("about", "services", "gallery", "faq", "contact"):
+        if site_data.get(section_key) is None:
+            continue  # Already null
+
+        matched = False
+        for slug in top_level_slugs:
+            # Exact slug match
+            if _PAGE_SLUG_TO_SECTION.get(slug) == section_key:
+                matched = True
+                break
+            # Fuzzy keyword match
+            keywords = _SECTION_FUZZY_KEYWORDS.get(section_key, [])
+            if any(kw in slug for kw in keywords):
+                matched = True
+                break
+
+        if matched:
+            logger.info("Dedup: custom page covers '%s' — nulling section", section_key)
             site_data[section_key] = None
 
     # Trim long page titles (strip " | BusinessName" pattern)
@@ -306,14 +324,29 @@ def _deduplicate_pages_vs_sections(site_data: dict) -> None:
             p["title"] = p["title"][:29].rstrip() + "…"
 
 
-def _sanitize_ai_output(site_data: dict) -> None:
+def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
     - Remove gallery images with null/empty URLs
     - Replace null strings with empty strings for required string fields
+    - Validate logo_url against the original input
     """
     # Promote home-page sections from pages[] to top level if needed
     _promote_home_page_sections(site_data)
+
+    # Validate logo: if no logo was provided to the generator, the AI must not
+    # use a page image as logo.  Null it out so the viewer shows business name.
+    branding = site_data.get("branding")
+    if isinstance(branding, dict):
+        ai_logo = branding.get("logo_url")
+        if ai_logo and not original_logo_url:
+            # AI invented a logo from page images — remove it
+            logger.info("Sanitize: AI set logo_url but no logo was provided — clearing")
+            branding["logo_url"] = None
+        elif ai_logo and original_logo_url and ai_logo != original_logo_url:
+            # AI replaced the real logo with a different image — restore
+            logger.info("Sanitize: AI changed logo_url — restoring original")
+            branding["logo_url"] = original_logo_url
 
     # Remove gallery images missing a URL
     gallery = site_data.get("gallery")
@@ -465,7 +498,7 @@ async def generate_site(
             install_apps = [s for s in install_apps if isinstance(s, str)]
 
             _strip_unknown_keys(site_data)
-            _sanitize_ai_output(site_data)
+            _sanitize_ai_output(site_data, original_logo_url=logo_url)
 
             # Assign a random style variant for visual variety.
             # The AI doesn't control this — it's pure backend randomization.
