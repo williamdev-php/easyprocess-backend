@@ -851,6 +851,7 @@ async def get_site_meta(site_id: str, db: AsyncSession = Depends(get_db)) -> dic
         "structured_data": seo.get("structured_data", {}),
         "robots": seo.get("robots", "index, follow"),
         "head_scripts": site_data.get("head_scripts"),
+        "subdomain": site.subdomain,
     }
 
     if site.status == SiteStatus.PUBLISHED:
