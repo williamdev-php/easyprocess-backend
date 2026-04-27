@@ -551,26 +551,41 @@ async def create_site_direct(
                     logger.warning("Planner failed, using fallback: %s", e)
                     blueprint = None
 
-                gen_result = await generate_site(
-                    business_name=payload.business_name,
-                    industry=industry_name,
-                    website_url="",
-                    email=payload.email,
-                    phone=None,
-                    address=None,
-                    texts=texts,
-                    colors=colors,
-                    services=None,
-                    logo_url=payload.logo_url,
-                    social_links=None,
-                    images=stored_images,
-                    visual_analysis=None,
-                    industry_prompt_hint=industry_prompt_hint,
-                    industry_default_sections=industry_default_sections,
-                    blueprint=blueprint,
-                    context=payload.context,
-                    is_freeform=True,
-                )
+                # Use orchestrator when blueprint has page plans
+                if blueprint and blueprint.pages_plan:
+                    from app.ai.generator import orchestrate_site_generation
+                    gen_result = await orchestrate_site_generation(
+                        blueprint=blueprint,
+                        business_name=payload.business_name,
+                        industry=industry_name,
+                        email=payload.email,
+                        colors=colors,
+                        logo_url=payload.logo_url,
+                        images=stored_images,
+                        context=payload.context,
+                        is_freeform=True,
+                    )
+                else:
+                    gen_result = await generate_site(
+                        business_name=payload.business_name,
+                        industry=industry_name,
+                        website_url="",
+                        email=payload.email,
+                        phone=None,
+                        address=None,
+                        texts=texts,
+                        colors=colors,
+                        services=None,
+                        logo_url=payload.logo_url,
+                        social_links=None,
+                        images=stored_images,
+                        visual_analysis=None,
+                        industry_prompt_hint=industry_prompt_hint,
+                        industry_default_sections=industry_default_sections,
+                        blueprint=blueprint,
+                        context=payload.context,
+                        is_freeform=True,
+                    )
 
                 site_data = gen_result.site_schema.model_dump(mode="json")
 

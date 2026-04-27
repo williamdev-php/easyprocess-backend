@@ -47,9 +47,9 @@ TILLGÄNGLIGA SEKTIONER:
 - "quiz": Interaktiv quiz/frågeformulär med frågor, alternativ och resultat.
 
 REGLER FÖR SEKTIONSVAL:
-1. "hero" ska ALLTID inkluderas med priority 1.
+1. "hero" ska ALLTID inkluderas för startsidan med priority 1.
 2. Välj sektioner INTELLIGENT baserat på syfte, bransch och tillgänglig info.
-3. En enkel verksamhet behöver 3-5 sektioner. Större företag 5-8.
+3. En enkel verksamhet behöver 3-5 sektioner på startsidan. Större företag 5-8.
 4. Inkludera ALDRIG alla sektioner. Tomma/generiska sektioner är värre än inga.
 5. "pricing", "team", "ranking", "video", "logo_cloud" — bara om det verkligen passar.
 6. Ordna sektioner i optimal visningsordning.
@@ -67,10 +67,21 @@ BILDPLACERING:
 - Om inga bilder: skippa gallery, fokusera på text-sektioner.
 
 UNDERSIDOR (pages_plan):
+Du ska planera SEPARATA UNDERSIDOR utöver startsidan. Varje undersida är en egen sida med eget fokus.
 - Enkel verksamhet: 2-3 sidor (startsida + om oss + kontakt).
 - Tjänsteföretag: 2-4 sidor (startsida + tjänster + om oss + kontakt).
-- Personlig sida: oftast bara 1 sida.
+- Personlig sida: oftast bara 1 sida (ingen pages_plan).
+- Frågesportsida / quiz-sajt: startsida med hero + quiz-sida + ev. resultat-sida.
+- Artikelsajt: startsida + artikelsidor.
+- Restaurang: startsida + meny + om oss + kontakt.
+- Varje undersida får EGEN lista med sektioner och tips.
 - Startsidan ska ha korta snippets, undersidor fullständigt innehåll.
+- Undersidornas sluggar ska vara DYNAMISKA och passa verksamheten:
+  * Restaurang: "meny", "om-oss", "kontakt"
+  * Frisör: "tjanster", "priser", "boka-tid"
+  * Quiz-sajt: "quiz", "resultat"
+  * Artikel-sajt: "artiklar"
+  * Byggfirma: "tjanster", "projekt", "om-oss", "kontakt"
 
 SVAR:
 Svara ENBART med valid JSON som matchar detta schema:
@@ -78,24 +89,29 @@ Svara ENBART med valid JSON som matchar detta schema:
   "purpose": "string — kort beskrivning av sidans syfte",
   "tone": "string — tonalitet, t.ex. 'professionell och inbjudande'",
   "target_audience": "string — målgrupp, t.ex. 'potentiella kunder i Stockholm'",
-  "sections": [
+  "homepage_sections": [
     {
-      "section": "string — sektionsnamn från listan ovan",
-      "tip": "string — specifikt tips för generatorn för denna sektion",
+      "section": "string — sektionsnamn",
+      "tip": "string — specifikt tips för generatorn",
       "priority": 1
     }
   ],
+  "sections": [],
   "excluded_sections": ["string — sektioner som INTE ska inkluderas och varför"],
   "color_direction": "string eller null — färgriktning om inga färger angivits",
   "content_direction": "string — övergripande riktlinje för innehållet",
   "pages_plan": [
     {
-      "slug": "string",
-      "title": "string",
-      "purpose": "string — vad sidan ska innehålla"
+      "slug": "string — t.ex. 'om-oss', 'tjanster', 'quiz'",
+      "title": "string — kort titel, t.ex. 'Om oss'",
+      "purpose": "string — vad sidan ska innehålla",
+      "sections": ["about", "features"],
+      "tips": ["Skriv detaljerad om-text med historia", "Lyft fram 4 USP:ar"]
     }
   ]
 }
+
+VIKTIG ÄNDRING: "homepage_sections" är sektionerna för STARTSIDAN. "sections" lämnas som tom lista (bakåtkompatibilitet). Varje undersida i "pages_plan" har sin egen "sections"-lista med sektionstyper och "tips" med genererings-tips.
 
 Ingen annan text — bara JSON.
 """

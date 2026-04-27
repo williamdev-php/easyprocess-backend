@@ -72,12 +72,7 @@ REGLER:
 12. Generera 4-6 FAQ-frågor relevanta för branschen.
 13. Generera 3-4 steg i en process-sektion om relevant.
 14. Generera 2-3 testimonials med realistiska svenska namn.
-15. SEO: Generera title och description i meta. Generera ÄVEN structured_data som JSON-LD i seo.structured_data. Inkludera rätt schema beroende på typ:
-   - LocalBusiness: för lokala företag med adress/telefon. Fält: @type, name, description, url, telephone, email, address (streetAddress, addressLocality, postalCode, addressCountry).
-   - Organization: för alla företag. Fält: @type, name, url, logo, contactPoint.
-   - WebSite: alltid. Fält: @type, name, url.
-   Kombinera flera schemas i en @graph-array: {"@context": "https://schema.org", "@graph": [...]}.
-   Robots sätts automatiskt — skippa robots-fältet.
+15. SEO: Skippa meta.title, meta.description, meta.keywords och seo.structured_data — dessa genereras AUTOMATISKT av backend-kod baserat på ditt innehåll. Fokusera på bra innehåll istället.
 16. Använd BARA bild-URL:er som finns i listan med tillgängliga bilder. Hitta INTE PÅ nya URL:er.
 17. STYLE VARIANT: Sidan tilldelas automatiskt en slumpmässig visuell stilvariant (style_variant) EFTER din generering — du behöver INTE ange den.
 18. LOGOTYP: Om logo_url är tom eller saknas i företagsdatan → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp. Logotypen visas i headern — om den inte finns visas företagsnamnet som text istället, vilket är bättre än en felaktig bild.
@@ -251,7 +246,7 @@ VIKTIGT: Svara med ENBART valid JSON. Använd BARA tillhandahållna bild-URL:er.
 
 STRUKTUR (fyll i alla relevanta fält, sätt irrelevanta sektioner till null):
 
-meta: {{title, description, keywords[], language: "sv"}}
+meta: {{language: "sv"}} (title, description, keywords genereras automatiskt)
 theme: "modern"
 branding: {{logo_url: "{logo_url}", colors: {{primary, secondary, accent, background, text}} (hex), fonts: {{heading: "Inter", body: "Inter"}}}}
 business: {{name, tagline (5-8 ord), email, phone, address, org_number: null, social_links: {{}}}}
@@ -282,7 +277,7 @@ SEKTIONER (varje sektion har title + subtitle om ej annat anges):
 PAGES (2-4 undersidor, startsidan = snippets, undersidor = fullständigt):
 pages: [{{slug, title, meta: {{title, description}}, sections: [{{type, data}}], parent_slug: null, show_in_nav: bool, nav_order: int}}]
 
-seo: {{structured_data: {{}}, robots: "index, follow"}}
+seo: {{}} (structured_data genereras automatiskt)
 install_apps: [] (lägg till "blog"/"chat" om relevant)"""
 
 
@@ -629,7 +624,7 @@ def build_prompt(
 # ---------------------------------------------------------------------------
 
 _COMPACT_SCHEMA = """SEKTIONSSCHEMA (fältnamn per typ):
-meta: {title, description, keywords[], language}
+meta: {language} (title, description, keywords genereras automatiskt av backend)
 theme: "modern"
 branding: {logo_url, colors: {primary, secondary, accent, background, text}, fonts: {heading, body}}
 business: {name, tagline, email, phone, address, org_number, social_links}
@@ -656,8 +651,8 @@ banner: {text, button: {label, href}}
 ranking: {items: [{rank, title, description, image, link: {label, href}}]}
 quiz: {title, subtitle, steps: [{question, options: [{label}]}], results: [{title, description, cta: {label, href}}], result_logic: "score"}
 
-pages: [{slug, title, meta: {title, description}, sections: [{type, data}], parent_slug, show_in_nav, nav_order}]
-seo: {structured_data, robots}
+pages: [{slug, title, sections: [{type, data}], parent_slug, show_in_nav, nav_order}]
+seo: {} (genereras automatiskt)
 install_apps: []"""
 
 _BLUEPRINT_SYSTEM_TEMPLATE = """Du är en expert svensk webbdesigner som skapar moderna, professionella hemsidor.
@@ -676,7 +671,7 @@ REGLER:
 5. Inkludera INTE navigation eller footer — det genereras automatiskt.
 6. CTA-knappar: href MÅSTE matcha en page-slug (t.ex. "/om-oss") eller standard-route ("/contact", "/about", "/services", "/gallery", "/faq"). Använd ALDRIG ankarlänkar (#contact).
 7. Skapa 2-4 undersidor via "pages". Startsidan = korta snippets, undersidor = fullständigt innehåll. Om du skapar en page som ersätter en standard-sektion (about, services, gallery, faq), sätt den top-level sektionen till null.
-8. SEO: Generera title och description i meta. Generera ÄVEN structured_data som JSON-LD i seo.structured_data med @graph-array (LocalBusiness om lokal, Organization, WebSite).
+8. SEO: Skippa meta.title, meta.description, meta.keywords och seo.structured_data — dessa genereras AUTOMATISKT av backend-kod. Fokusera på bra innehåll.
 9. LOGOTYP: Om logotyp-URL är tom eller saknas → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp.
 10. Page-titlar ska vara KORTA (max 2-3 ord): "Om oss", "Tjänster", etc. ALDRIG med företagsnamn.
 
@@ -1128,5 +1123,294 @@ GENERERA JSON
 
 Logotyp: {logo_url or ""}{font_line}
 Svara med ENBART valid JSON. Följ blueprintens sektioner och tips. Generera allt innehåll baserat på kundens beskrivning ovan."""
+
+    return system_prompt, user_prompt
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator prompt builders (per-page generation)
+# ---------------------------------------------------------------------------
+
+_HOMEPAGE_SYSTEM_TEMPLATE = """Du är en expert svensk webbdesigner som skapar startsidor för professionella hemsidor.
+
+Du genererar ENBART startsidans innehåll — inga undersidor. Undersidorna genereras separat.
+
+BLUEPRINT:
+{blueprint_json}
+
+REGLER:
+1. Svara ENBART med valid JSON. Ingen annan text.
+2. Generera BARA de sektioner som listas i blueprintens homepage_sections.
+3. Alla texter på svenska om inte annat anges. Skriv KORTFATTAT — startsidan ska ha SNIPPETS, inte fullständigt innehåll.
+4. Inkludera "section_settings" med varierade animationer.
+5. Inkludera INTE navigation, footer eller "pages" — de genereras separat.
+6. CTA-knappar: href ska peka till undersidornas sluggar (t.ex. "/om-oss", "/tjanster") eller externa URLs.
+7. SEO genereras automatiskt — skippa meta.title, meta.description, meta.keywords, seo.
+8. LOGOTYP: Om logotyp-URL är tom → sätt branding.logo_url till null.
+9. Använd BARA bild-URL:er från listan. Hitta INTE PÅ nya URL:er.
+
+UNDERSIDOR SOM KOMMER SKAPAS (använd deras sluggar i CTA-knappar):
+{pages_plan_summary}
+
+{compact_schema_homepage}"""
+
+_COMPACT_SCHEMA_HOMEPAGE = """SCHEMA FÖR STARTSIDAN:
+meta: {{language: "sv"}}
+theme: "modern"
+branding: {{logo_url, colors: {{primary, secondary, accent, background, text}}, fonts: {{heading, body}}}}
+business: {{name, tagline, email, phone, address, org_number, social_links}}
+section_order: [valda sektioner]
+section_settings: {{sektionsnamn: {{animation}}}}
+
+hero: {{headline (max 8 ord), subtitle (1-2 meningar), cta: {{label, href}}, background_image}}
+about: {{title, text (KORT snippet, 40-60 ord), image, highlights: [{{label, value}}]}}
+features: {{items: [{{title, description (max 2 meningar)}}]}}
+stats: {{items: [{{value, label}}]}}
+services: {{items: [{{title, description (max 2 meningar)}}]}}
+process: {{steps: [{{title, description, step_number}}]}}
+gallery: {{images: [{{url, alt, caption}}]}}
+team: {{members: [{{name, role, image, bio (1 mening)}}]}}
+testimonials: {{items: [{{text (2-3 meningar), author, role}}]}}
+faq: {{items: [{{question, answer (1-2 meningar)}}]}}
+cta: {{title, text (1 mening), button: {{label, href}}}}
+contact: {{title, text (1 mening)}}
+pricing: {{tiers: [{{name, price, description, features[], highlighted, cta}}]}}
+video: {{title, video_url}}
+logo_cloud: {{logos: [{{name, image_url}}]}}
+custom_content: {{blocks: [{{type, content, url, alt, label, href}}]}}
+banner: {{text, button: {{label, href}}}}
+ranking: {{items: [{{rank, title, description, image, link: {{label, href}}}}]}}
+quiz: {{title, subtitle, steps: [{{question, options: [{{label}}]}}], results: [{{title, description, cta}}], result_logic: "score"}}
+install_apps: [] (lägg till "blog"/"chat" om relevant)"""
+
+
+_PAGE_SYSTEM_TEMPLATE = """Du är en expert svensk webbdesigner som skapar innehåll för EN specifik undersida.
+
+Du genererar ENBART sektionerna för denna undersida — inte startsidan eller andra sidor.
+
+SIDPLAN:
+Slug: {slug}
+Titel: {title}
+Syfte: {purpose}
+Sektioner att skapa: {sections_list}
+Tips: {tips_list}
+
+BRAND-KONTEXT (samma för hela sajten):
+Ton: {tone}
+Målgrupp: {target_audience}
+Innehållsriktning: {content_direction}
+
+REGLER:
+1. Svara ENBART med valid JSON. Ingen annan text.
+2. Generera BARA de sektioner som anges i "Sektioner att skapa".
+3. Alla texter på svenska om inte annat anges.
+4. Skriv UTFÖRLIGT — undersidor ska ha FULLSTÄNDIGT innehåll (till skillnad från startsidans snippets).
+5. Använd BARA bild-URL:er från listan. Hitta INTE PÅ nya URL:er.
+6. CTA-knappar: href ska peka till andra undersidors sluggar eller "/".
+7. Inkludera varierade section_settings med animationer.
+
+SVAR — JSON med denna struktur:
+{{{{
+  "sections": [
+    {{{{"type": "sektionstyp", "data": {{{{...sektionsfält...}}}}}}}}
+  ],
+  "section_settings": {{{{sektionsnamn: {{{{animation}}}}}}}}
+}}}}
+
+{compact_section_schema}"""
+
+_COMPACT_SECTION_SCHEMA = """SEKTIONSTYPER:
+hero: {{headline, subtitle, cta: {{label, href}}, background_image}}
+about: {{title, text (150-250 ord, utförligt), image, highlights: [{{label, value}}]}}
+features: {{items: [{{title, description}}]}}
+stats: {{items: [{{value, label}}]}}
+services: {{items: [{{title, description (3-4 meningar)}}]}}
+process: {{steps: [{{title, description, step_number}}]}}
+gallery: {{images: [{{url, alt, caption}}]}}
+team: {{members: [{{name, role, image, bio}}]}}
+testimonials: {{items: [{{text, author, role}}]}}
+faq: {{items: [{{question, answer (2-3 meningar)}}]}}
+cta: {{title, text, button: {{label, href}}}}
+contact: {{title, text, show_form: true, show_info: true}}
+pricing: {{tiers: [{{name, price, description, features[], highlighted, cta}}]}}
+video: {{title, video_url}}
+logo_cloud: {{logos: [{{name, image_url}}]}}
+custom_content: {{blocks: [{{type, content, url, alt, label, href}}]}}
+banner: {{text, button: {{label, href}}}}
+ranking: {{items: [{{rank, title, description, image, link: {{label, href}}}}]}}
+quiz: {{title, subtitle, steps: [{{question, options: [{{label}}]}}], results: [{{title, description, cta}}], result_logic: "score"}}"""
+
+
+def build_homepage_prompt(
+    blueprint: "SiteBlueprint",
+    business_name: str,
+    email: str | None,
+    phone: str | None,
+    address: str | None,
+    colors: dict | None,
+    logo_url: str | None,
+    social_links: dict | None,
+    images: list | None = None,
+    visual_analysis: dict | None = None,
+    texts: dict | None = None,
+    services: list | None = None,
+    context: str | None = None,
+    crawl_report: dict | None = None,
+    industry: str | None = None,
+) -> tuple[str, str]:
+    """Build (system_prompt, user_prompt) for homepage-only generation."""
+
+    # Use homepage_sections if available, fall back to sections
+    bp_sections = blueprint.homepage_sections or blueprint.sections
+    bp_data = blueprint.model_dump(exclude={"pages_plan"}, mode="json")
+    bp_data["homepage_sections"] = [s.model_dump() for s in bp_sections]
+    blueprint_json = json.dumps(bp_data, ensure_ascii=False, indent=2)
+
+    # Build pages summary for CTA link context
+    pages_summary = "Inga undersidor planerade."
+    if blueprint.pages_plan:
+        lines = []
+        for pp in blueprint.pages_plan:
+            lines.append(f'  - /{pp.slug} — "{pp.title}" ({pp.purpose})')
+        pages_summary = "\n".join(lines)
+
+    system_prompt = _HOMEPAGE_SYSTEM_TEMPLATE.format(
+        blueprint_json=blueprint_json,
+        pages_plan_summary=pages_summary,
+        compact_schema_homepage=_COMPACT_SCHEMA_HOMEPAGE,
+    )
+
+    # Build user prompt
+    images_summary = _format_images_list(images)
+    css_colors = _format_colors(colors)
+    visual_colors_section = _format_visual_colors(visual_analysis)
+
+    # Scraped data if available
+    scraped_section = ""
+    if texts or services:
+        t = _format_scraped_texts(texts, services)
+        scraped_section = f"""
+═══════════════════════════════════════
+SCRAPAD DATA
+═══════════════════════════════════════
+Hero-rubrik: {t['hero_text']}
+Hero-undertext: {t['hero_subtitle']}
+Om oss: {t['about_text'][:300]}
+Tjänster: {t['services_summary'][:300]}
+"""
+
+    context_section = ""
+    if context:
+        context_section = f"""
+═══════════════════════════════════════
+KUNDENS BESKRIVNING
+═══════════════════════════════════════
+{_sanitize_for_prompt(context, 2000)}
+"""
+
+    crawl_section = _format_crawl_report(crawl_report) if crawl_report else ""
+
+    social_str = "Inga"
+    if social_links:
+        social_str = ", ".join(f"{k}: {v}" for k, v in social_links.items())
+
+    user_prompt = f"""Generera ENBART startsidans sektioner.
+
+═══════════════════════════════════════
+FÖRETAG
+═══════════════════════════════════════
+Namn: {_sanitize_for_prompt(business_name, 200) if business_name else "Okänt företag"}
+Bransch: {_sanitize_for_prompt(industry, 100) if industry else "Okänd"}
+Email: {_sanitize_for_prompt(email, 200) if email else "Ej angiven"}
+Telefon: {_sanitize_for_prompt(phone, 50) if phone else "Ej angiven"}
+Adress: {_sanitize_for_prompt(address, 300) if address else "Ej angiven"}
+Sociala medier: {social_str}
+{context_section}{scraped_section}{crawl_section}
+═══════════════════════════════════════
+FÄRGER
+═══════════════════════════════════════
+{css_colors}
+{visual_colors_section}
+
+═══════════════════════════════════════
+BILDER (använd ENBART dessa URL:er)
+═══════════════════════════════════════
+{images_summary}
+
+Logotyp: {logo_url or ""}
+Svara med ENBART valid JSON."""
+
+    return system_prompt, user_prompt
+
+
+def build_page_prompt(
+    page_plan: "PagePlan",
+    blueprint: "SiteBlueprint",
+    business_name: str,
+    images: list | None = None,
+    context: str | None = None,
+    texts: dict | None = None,
+    services: list | None = None,
+    all_page_slugs: list[str] | None = None,
+) -> tuple[str, str]:
+    """Build (system_prompt, user_prompt) for a single sub-page generation."""
+
+    sections_list = ", ".join(page_plan.sections)
+    tips_list = "\n".join(f"  - {t}" for t in page_plan.tips) if page_plan.tips else "Inga specifika tips."
+
+    system_prompt = _PAGE_SYSTEM_TEMPLATE.format(
+        slug=page_plan.slug,
+        title=page_plan.title,
+        purpose=page_plan.purpose,
+        sections_list=sections_list,
+        tips_list=tips_list,
+        tone=_sanitize_for_prompt(blueprint.tone, 200),
+        target_audience=_sanitize_for_prompt(blueprint.target_audience, 200),
+        content_direction=_sanitize_for_prompt(blueprint.content_direction, 500),
+        compact_section_schema=_COMPACT_SECTION_SCHEMA,
+    )
+
+    images_summary = _format_images_list(images)
+
+    # Relevant scraped data for this page type
+    relevant_data = ""
+    if texts:
+        t = _format_scraped_texts(texts, services)
+        data_parts: list[str] = []
+        for sec in page_plan.sections:
+            if sec == "about" and t["about_text"] != "Ingen about-text hittad.":
+                data_parts.append(f"Om oss-text: {t['about_text']}")
+            elif sec == "services" and t["services_summary"] != "Inga tjänster hittade.":
+                data_parts.append(f"Tjänster: {t['services_summary']}")
+            elif sec == "faq" and t["faq_summary"] != "Ingen FAQ hittad.":
+                data_parts.append(f"FAQ: {t['faq_summary']}")
+            elif sec == "team" and t["team_summary"] != "Inga teammedlemmar hittade.":
+                data_parts.append(f"Team: {t['team_summary']}")
+            elif sec == "features" and t["features_summary"] != "Inga features hittade.":
+                data_parts.append(f"Features: {t['features_summary']}")
+        if data_parts:
+            relevant_data = "\n═══════════════════════════════════════\nSCRAPAD DATA\n═══════════════════════════════════════\n" + "\n".join(data_parts)
+
+    context_section = ""
+    if context:
+        context_section = f"\nKundens beskrivning: {_sanitize_for_prompt(context, 500)}"
+
+    other_pages = ""
+    if all_page_slugs:
+        other_slugs = [s for s in all_page_slugs if s != page_plan.slug]
+        if other_slugs:
+            other_pages = f"\nAndra undersidor (för CTA-länkar): {', '.join('/' + s for s in other_slugs)}, /"
+
+    user_prompt = f"""Generera innehåll för undersidan "/{page_plan.slug}" ({page_plan.title}).
+
+Företag: {_sanitize_for_prompt(business_name, 200) if business_name else "Okänt företag"}
+{context_section}{relevant_data}{other_pages}
+
+═══════════════════════════════════════
+BILDER (använd ENBART dessa URL:er)
+═══════════════════════════════════════
+{images_summary}
+
+Svara med ENBART valid JSON."""
 
     return system_prompt, user_prompt

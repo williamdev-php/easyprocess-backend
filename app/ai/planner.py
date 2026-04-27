@@ -36,15 +36,25 @@ class SectionPlan(BaseModel):
     priority: int         # 1=must-have, 2=recommended, 3=nice-to-have
 
 
+class PagePlan(BaseModel):
+    """Plan for a single sub-page (not the homepage)."""
+    slug: str             # "om-oss", "tjanster", "kontakt"
+    title: str            # "Om oss"
+    purpose: str          # "Fullständig presentation av företaget"
+    sections: list[str]   # ["about", "features", "stats"]
+    tips: list[str] = []  # Per-section generation tips
+
+
 class SiteBlueprint(BaseModel):
     purpose: str          # "Företagssida för restaurang"
     tone: str             # "professionell och inbjudande"
     target_audience: str  # "potentiella kunder"
-    sections: list[SectionPlan]
+    homepage_sections: list[SectionPlan] | None = None  # Explicit homepage sections
+    sections: list[SectionPlan]       # Legacy: kept for backward compat
     excluded_sections: list[str]
     color_direction: str | None = None
     content_direction: str
-    pages_plan: list[dict] | None = None
+    pages_plan: list[PagePlan] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +87,7 @@ async def plan_site(
 
     payload = {
         "model": _PLANNER_MODEL,
-        "max_tokens": 1500,
+        "max_tokens": 2500,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.3,

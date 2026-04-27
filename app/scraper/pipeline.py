@@ -355,26 +355,48 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.status = LeadStatus.GENERATING
             await db.commit()
 
-            gen_result = await generate_site(
-                business_name=lead.business_name,
-                industry=lead.industry,
-                website_url=lead.website_url,
-                email=lead.email,
-                phone=lead.phone,
-                address=lead.address,
-                texts=data["texts"],
-                colors=data["colors"],
-                services=data["texts"].get("services"),
-                logo_url=data["logo_url"],
-                social_links=contact.get("social_links"),
-                images=data["images"],
-                visual_analysis=data.get("visual_analysis"),
-                screenshot_bytes=screenshot_data,
-                industry_prompt_hint=_industry_hint,
-                industry_default_sections=_industry_sections,
-                crawl_report=data.get("crawl_report"),
-                blueprint=blueprint,
-            )
+            # Use orchestrator when blueprint has page plans
+            if blueprint and blueprint.pages_plan:
+                from app.ai.generator import orchestrate_site_generation
+                gen_result = await orchestrate_site_generation(
+                    blueprint=blueprint,
+                    business_name=lead.business_name,
+                    industry=lead.industry,
+                    website_url=lead.website_url,
+                    email=lead.email,
+                    phone=lead.phone,
+                    address=lead.address,
+                    texts=data["texts"],
+                    colors=data["colors"],
+                    services=data["texts"].get("services"),
+                    logo_url=data["logo_url"],
+                    social_links=contact.get("social_links"),
+                    images=data["images"],
+                    visual_analysis=data.get("visual_analysis"),
+                    screenshot_bytes=screenshot_data,
+                    crawl_report=data.get("crawl_report"),
+                )
+            else:
+                gen_result = await generate_site(
+                    business_name=lead.business_name,
+                    industry=lead.industry,
+                    website_url=lead.website_url,
+                    email=lead.email,
+                    phone=lead.phone,
+                    address=lead.address,
+                    texts=data["texts"],
+                    colors=data["colors"],
+                    services=data["texts"].get("services"),
+                    logo_url=data["logo_url"],
+                    social_links=contact.get("social_links"),
+                    images=data["images"],
+                    visual_analysis=data.get("visual_analysis"),
+                    screenshot_bytes=screenshot_data,
+                    industry_prompt_hint=_industry_hint,
+                    industry_default_sections=_industry_sections,
+                    crawl_report=data.get("crawl_report"),
+                    blueprint=blueprint,
+                )
 
             # Inject favicon_url into generated site meta (AI may not include it)
             if data.get("favicon_url") and not gen_result.site_schema.meta.favicon_url:

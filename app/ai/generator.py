@@ -585,6 +585,10 @@ async def generate_site(
             _strip_unknown_keys(site_data)
             _sanitize_ai_output(site_data, original_logo_url=logo_url)
 
+            # Auto-generate SEO fields from content
+            from app.ai.seo_generator import generate_seo
+            generate_seo(site_data)
+
             # Assign a random style variant for visual variety.
             # The AI doesn't control this — it's pure backend randomization.
             site_data["style_variant"] = random.randint(0, TOTAL_STYLE_VARIANTS - 1)
@@ -621,6 +625,240 @@ async def generate_site(
             continue
 
     raise RuntimeError(f"Failed to generate valid site after 2 attempts: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrated multi-call generation
+# ---------------------------------------------------------------------------
+
+_ORCHESTRATOR_SEMAPHORE = asyncio.Semaphore(4)
+
+
+async def orchestrate_site_generation(
+    blueprint: "SiteBlueprint",
+    business_name: str,
+    industry: str | None = None,
+    website_url: str = "",
+    email: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+    texts: dict | None = None,
+    colors: dict | None = None,
+    services: list | None = None,
+    logo_url: str | None = None,
+    social_links: dict | None = None,
+    images: list | None = None,
+    visual_analysis: dict | None = None,
+    model_override: str | None = None,
+    screenshot_bytes: list[dict] | None = None,
+    crawl_report: dict | None = None,
+    context: str | None = None,
+    is_freeform: bool = False,
+) -> GenerationResult:
+    """Orchestrated generation: 1 LLM call for homepage + 1 per sub-page.
+
+    Produces higher quality by giving each page full AI attention.
+    Falls back to single-call generate_site() if orchestration fails.
+    """
+    from app.ai.prompts import build_homepage_prompt, build_page_prompt
+
+    # Resolve model
+    if model_override:
+        model = model_override
+    else:
+        try:
+            async with get_db_session() as db:
+                model = await get_setting(db, "ai_model")
+        except Exception:
+            model = settings.AI_MODEL
+
+    is_gemini = model in _GEMINI_MODELS
+    total_input = 0
+    total_output = 0
+    start = time.monotonic()
+
+    # --- Step 1: Generate homepage ---
+    homepage_system, homepage_user = build_homepage_prompt(
+        blueprint=blueprint,
+        business_name=business_name,
+        email=email,
+        phone=phone,
+        address=address,
+        colors=colors,
+        logo_url=logo_url,
+        social_links=social_links,
+        images=images,
+        visual_analysis=visual_analysis,
+        texts=texts,
+        services=services,
+        context=context,
+        crawl_report=crawl_report,
+        industry=industry,
+    )
+
+    homepage_data = await _call_and_parse(
+        homepage_system, homepage_user, model, is_gemini,
+        screenshot_bytes=screenshot_bytes,
+        max_tokens=8000,
+    )
+    total_input += homepage_data["_input_tokens"]
+    total_output += homepage_data["_output_tokens"]
+    del homepage_data["_input_tokens"]
+    del homepage_data["_output_tokens"]
+
+    logger.info(
+        "Orchestrator: homepage generated, sections=%s",
+        homepage_data.get("section_order", []),
+    )
+
+    # Extract install_apps from homepage
+    install_apps = homepage_data.pop("install_apps", [])
+    if not isinstance(install_apps, list):
+        install_apps = []
+
+    # --- Step 2: Generate sub-pages in parallel ---
+    page_results: list[dict] = []
+
+    if blueprint.pages_plan:
+        all_slugs = [pp.slug for pp in blueprint.pages_plan]
+
+        async def _gen_page(pp):
+            async with _ORCHESTRATOR_SEMAPHORE:
+                page_sys, page_usr = build_page_prompt(
+                    page_plan=pp,
+                    blueprint=blueprint,
+                    business_name=business_name,
+                    images=images,
+                    context=context,
+                    texts=texts,
+                    services=services,
+                    all_page_slugs=all_slugs,
+                )
+                try:
+                    result = await _call_and_parse(
+                        page_sys, page_usr, model, is_gemini,
+                        max_tokens=5000,
+                    )
+                    return pp, result
+                except Exception as e:
+                    logger.warning("Orchestrator: page '%s' failed: %s", pp.slug, e)
+                    return pp, None
+
+        tasks = [_gen_page(pp) for pp in blueprint.pages_plan]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        for pp, result in results:
+            if result is None:
+                continue
+            inp = result.pop("_input_tokens", 0)
+            outp = result.pop("_output_tokens", 0)
+            total_input += inp
+            total_output += outp
+
+            page_dict = {
+                "slug": pp.slug,
+                "title": pp.title,
+                "sections": result.get("sections", []),
+                "show_in_nav": True,
+                "nav_order": len(page_results) + 1,
+            }
+            # Apply section_settings from page result
+            if result.get("section_settings"):
+                # Merge into homepage_data section_settings with page-prefixed keys
+                ss = homepage_data.get("section_settings") or {}
+                for k, v in result["section_settings"].items():
+                    ss[f"{pp.slug}_{k}"] = v
+                homepage_data["section_settings"] = ss
+
+            page_results.append(page_dict)
+            logger.info(
+                "Orchestrator: page '%s' generated, sections=%d",
+                pp.slug, len(page_dict["sections"]),
+            )
+
+    # --- Step 3: Assemble ---
+    site_data = _assemble_site(homepage_data, page_results)
+
+    # --- Step 4: SEO post-processor ---
+    from app.ai.seo_generator import generate_seo
+    generate_seo(site_data)
+
+    # --- Step 5: Standard sanitization ---
+    _strip_unknown_keys(site_data)
+    _sanitize_ai_output(site_data, original_logo_url=logo_url)
+
+    site_data["style_variant"] = random.randint(0, TOTAL_STYLE_VARIANTS - 1)
+    site_data["viewer_version"] = CURRENT_VIEWER_VERSION
+
+    site_schema = SiteSchema(**site_data)
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    total_tokens = total_input + total_output
+    input_cost_per_m = _INPUT_COST_PER_1M.get(model, 1.0)
+    output_cost_per_m = _OUTPUT_COST_PER_1M.get(model, 5.0)
+    cost = (total_input / 1_000_000) * input_cost_per_m + (total_output / 1_000_000) * output_cost_per_m
+
+    logger.info(
+        "Orchestrator complete: pages=%d model=%s in=%d out=%d cost=$%.4f duration=%dms",
+        len(page_results), model, total_input, total_output, cost, duration_ms,
+    )
+
+    return GenerationResult(
+        site_schema=site_schema,
+        tokens_used=total_tokens,
+        input_tokens=total_input,
+        output_tokens=total_output,
+        model=model,
+        cost_usd=round(cost, 6),
+        duration_ms=duration_ms,
+        install_apps=[s for s in install_apps if isinstance(s, str)],
+    )
+
+
+def _assemble_site(homepage_data: dict, page_results: list[dict]) -> dict:
+    """Merge homepage + page results into a complete site_data dict."""
+    site_data = dict(homepage_data)
+
+    if page_results:
+        site_data["pages"] = page_results
+
+    # Ensure required top-level keys exist
+    if "meta" not in site_data or not isinstance(site_data.get("meta"), dict):
+        site_data["meta"] = {}
+    if "seo" not in site_data or not isinstance(site_data.get("seo"), dict):
+        site_data["seo"] = {}
+
+    return site_data
+
+
+async def _call_and_parse(
+    system: str,
+    user: str,
+    model: str,
+    is_gemini: bool,
+    screenshot_bytes: list[dict] | None = None,
+    max_tokens: int = 8000,
+) -> dict:
+    """Make an LLM call and parse the JSON result. Returns dict with _input_tokens/_output_tokens."""
+    for attempt in range(2):
+        try:
+            if is_gemini:
+                raw_json, inp, outp = await _call_gemini(system, user, model, screenshot_bytes=screenshot_bytes)
+            else:
+                raw_json, inp, outp = await _call_anthropic(system, user, model, screenshot_bytes=screenshot_bytes)
+
+            data = json.loads(raw_json)
+            data["_input_tokens"] = inp
+            data["_output_tokens"] = outp
+            return data
+
+        except (json.JSONDecodeError, ValueError) as e:
+            if attempt == 0:
+                logger.warning("Orchestrator parse attempt %d failed: %s", attempt + 1, e)
+                continue
+            raise
+
+    raise RuntimeError("Failed to parse LLM response after 2 attempts")
 
 
 async def _call_anthropic(
