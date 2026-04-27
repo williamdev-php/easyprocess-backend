@@ -79,6 +79,26 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Reusable eager-loading options for Lead queries
+# ---------------------------------------------------------------------------
+
+def _lead_eager_options():
+    """Return selectinload options for all Lead relationships used by _lead_to_gql.
+
+    Always use these options when querying Leads that will be converted to
+    GraphQL types, to avoid N+1 queries on scraped_data, generated_site,
+    outreach_emails, inbound_emails, and industry_rel.
+    """
+    return [
+        selectinload(Lead.scraped_data),
+        selectinload(Lead.generated_site),
+        selectinload(Lead.outreach_emails),
+        selectinload(Lead.inbound_emails),
+        selectinload(Lead.industry_rel),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Free plan helpers
 # ---------------------------------------------------------------------------
 
@@ -104,8 +124,8 @@ async def _require_subscription(db, user: User, action: str = "This action") -> 
         return
     if not await _has_active_subscription(db, user):
         raise ValueError(
-            f"{action} kräver ett aktivt abonnemang. "
-            "Uppgradera din plan under Betalning."
+            f"SUBSCRIPTION_REQUIRED: {action} requires an active subscription. "
+            "Please upgrade your plan."
         )
 
 
@@ -126,8 +146,8 @@ async def _check_site_limit(db, user: User) -> None:
     count = count_result.scalar() or 0
     if count >= 1:
         raise ValueError(
-            "Free-planen tillåter max 1 hemsida. "
-            "Uppgradera din plan för att skapa fler."
+            "SITE_LIMIT_REACHED: Free plan allows max 1 site. "
+            "Please upgrade your plan to create more."
         )
 
 
@@ -315,16 +335,16 @@ def _extract_vercel_verification(vercel_data: dict) -> dict:
         verification_records = vercel_data.get("verification", [])
         if verification_records:
             result["instructions"] = (
-                "Lägg till följande TXT-post i din DNS för att verifiera domänen: "
-                f"Typ: TXT, Namn: _vercel, Värde: {verification_records[0].get('value', '')}"
+                "Add the following TXT record to your DNS to verify the domain: "
+                f"Type: TXT, Name: _vercel, Value: {verification_records[0].get('value', '')}"
             )
         else:
             result["instructions"] = (
-                "Peka din domän till Vercel genom att lägga till en CNAME-post: "
-                "Typ: CNAME, Namn: @ (eller www), Värde: cname.vercel-dns.com"
+                "Point your domain to Vercel by adding a CNAME record: "
+                "Type: CNAME, Name: @ (or www), Value: cname.vercel-dns.com"
             )
     else:
-        result["instructions"] = "Domänen är verifierad och aktiv!"
+        result["instructions"] = "Domain is verified and active!"
 
     return result
 
@@ -572,7 +592,7 @@ class SiteQuery:
         from app.sites.vercel import check_domain_availability
         result = await check_domain_availability(domain.strip().lower())
         if not result:
-            raise ValueError("Kunde inte kontrollera domäntillgänglighet")
+            raise ValueError("DOMAIN_CHECK_FAILED: Unable to check domain availability")
 
         return DomainSearchResult(
             available=result.get("available", False),
@@ -667,13 +687,7 @@ class SiteQuery:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == id)
-                .options(
-                    selectinload(Lead.scraped_data),
-                    selectinload(Lead.generated_site),
-                    selectinload(Lead.outreach_emails),
-                    selectinload(Lead.inbound_emails),
-                    selectinload(Lead.industry_rel),
-                )
+                .options(*_lead_eager_options())
             )
             lead = result.scalar_one_or_none()
             return _lead_to_gql(lead) if lead else None
@@ -683,16 +697,10 @@ class SiteQuery:
         """List leads with filtering and pagination (superadmin only)."""
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
         f = filter or LeadFilterInput()
-        page_size = min(f.page_size, 100)
+        page_size = f.validated_page_size()
 
         async with get_db_session() as db:
-            query = select(Lead).options(
-                selectinload(Lead.scraped_data),
-                selectinload(Lead.generated_site),
-                selectinload(Lead.outreach_emails),
-                selectinload(Lead.inbound_emails),
-                selectinload(Lead.industry_rel),
-            )
+            query = select(Lead).options(*_lead_eager_options())
 
             if f.status:
                 query = query.where(Lead.status == LeadStatus(f.status))
@@ -717,8 +725,7 @@ class SiteQuery:
             total = count_result.scalar() or 0
 
             # Paginate
-            offset = (f.page - 1) * page_size
-            query = query.order_by(Lead.created_at.desc()).offset(offset).limit(page_size)
+            query = query.order_by(Lead.created_at.desc()).offset(f.offset()).limit(page_size)
 
             result = await db.execute(query)
             leads = result.scalars().all()
@@ -818,8 +825,8 @@ class SiteQuery:
 
         user = _require_superuser(_require_user(await _get_user_from_info(info)))
         f = filter or AdminSiteFilterInput()
-        page_size = min(f.page_size, 50)
-        offset = (f.page - 1) * page_size
+        page_size = f.validated_page_size(max_size=50)
+        offset = f.offset(max_size=50)
 
         async with get_db_session() as db:
             from app.auth.models import User as UserModel
@@ -957,7 +964,7 @@ class SiteQuery:
 
         async with get_db_session() as db:
             f = filter or InboundEmailFilterInput()
-            page_size = min(f.page_size, 100)
+            page_size = f.validated_page_size()
 
             query = select(InboundEmail)
             count_query = select(func.count()).select_from(InboundEmail)
@@ -990,7 +997,7 @@ class SiteQuery:
             total = (await db.execute(count_query)).scalar() or 0
 
             query = query.order_by(InboundEmail.created_at.desc())
-            query = query.offset((f.page - 1) * page_size).limit(page_size)
+            query = query.offset(f.offset()).limit(page_size)
 
             result = await db.execute(query)
             emails = result.scalars().all()
@@ -1285,13 +1292,7 @@ class SiteMutation:
             result = await db.execute(
                 select(Lead)
                 .where(Lead.id == lead_id)
-                .options(
-                    selectinload(Lead.scraped_data),
-                    selectinload(Lead.generated_site),
-                    selectinload(Lead.outreach_emails),
-                    selectinload(Lead.inbound_emails),
-                    selectinload(Lead.industry_rel),
-                )
+                .options(*_lead_eager_options())
             )
             lead = result.scalar_one_or_none()
             if not lead:
@@ -1866,7 +1867,7 @@ class SiteMutation:
 
         async with get_db_session() as db:
             # Free plan: no custom domains
-            await _require_subscription(db, user, "Egen domän")
+            await _require_subscription(db, user, "Custom domain")
 
             # Check if domain already exists
             existing = await db.execute(
@@ -2167,9 +2168,9 @@ class SiteMutation:
             )
             purchase = result.scalar_one_or_none()
             if not purchase:
-                raise ValueError("Köpt domän hittades inte")
+                raise ValueError("DOMAIN_NOT_FOUND: Purchased domain not found")
             if purchase.status.value != "PURCHASED":
-                raise ValueError("Domänen måste ha status PURCHASED för att kunna överföras")
+                raise ValueError("INVALID_DOMAIN_STATUS: Domain must have status PURCHASED to be transferred")
 
             from app.sites.vercel import get_transfer_auth_code
 
@@ -2184,10 +2185,10 @@ class SiteMutation:
                 is_locked=False,
                 auth_code=auth_code,
                 instructions=(
-                    "Domänen är nu upplåst för överföring. "
-                    "Använd auktoriseringskoden hos din nya domänregistrar för att initiera flytten. "
-                    "Överföringen tar vanligtvis 5-7 dagar. "
-                    "Domänen låses automatiskt igen efter 14 dagar om ingen överföring sker."
+                    "The domain is now unlocked for transfer. "
+                    "Use the authorization code at your new domain registrar to initiate the transfer. "
+                    "The transfer typically takes 5-7 days. "
+                    "The domain will be automatically re-locked after 14 days if no transfer is initiated."
                 ),
             )
 
@@ -2205,7 +2206,7 @@ class SiteMutation:
             )
             purchase = result.scalar_one_or_none()
             if not purchase:
-                raise ValueError("Köpt domän hittades inte")
+                raise ValueError("DOMAIN_NOT_FOUND: Purchased domain not found")
 
             # Re-locking is not exposed in the new Registrar API;
             # the domain is implicitly locked when no transfer is active.
@@ -2240,7 +2241,7 @@ class SiteMutation:
             )
             purchase = result.scalar_one_or_none()
             if not purchase:
-                raise ValueError("Köpt domän hittades inte")
+                raise ValueError("DOMAIN_NOT_FOUND: Purchased domain not found")
 
             purchase.auto_renew = auto_renew
             await db.commit()
@@ -2272,15 +2273,15 @@ class SiteMutation:
             )
             purchase = result.scalar_one_or_none()
             if not purchase:
-                raise ValueError("Köpt domän hittades inte")
+                raise ValueError("DOMAIN_NOT_FOUND: Purchased domain not found")
             if purchase.status.value != "PURCHASED":
-                raise ValueError("Kan bara förnya aktiva domäner")
+                raise ValueError("INVALID_DOMAIN_STATUS: Can only renew active domains")
 
             # Get renewal price
             from app.sites.vercel import check_domain_price, renew_domain as vercel_renew
             price_info = await check_domain_price(purchase.domain)
             if not price_info:
-                raise ValueError("Kunde inte hämta förnyelsepris")
+                raise ValueError("RENEWAL_PRICE_FAILED: Unable to fetch renewal price")
 
             # Create PaymentIntent for renewal
             import stripe
@@ -2299,7 +2300,7 @@ class SiteMutation:
                     "qvicko_type": "domain_renewal",
                     "qvicko_purchase_id": purchase.id,
                 },
-                description=f"Domänförnyelse: {purchase.domain}",
+                description=f"Domain renewal: {purchase.domain}",
                 confirm=True,
                 automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             )
@@ -2316,9 +2317,9 @@ class SiteMutation:
                     purchase.price_sek = price_sek_ore
                     await db.commit()
                 else:
-                    raise ValueError("Vercel-förnyelse misslyckades. Betalning återbetalas.")
+                    raise ValueError("RENEWAL_FAILED: Domain renewal failed. Payment will be refunded.")
             else:
-                raise ValueError("Betalningen kunde inte genomföras. Kontrollera ditt betalkort.")
+                raise ValueError("PAYMENT_FAILED: Payment could not be processed. Please check your payment method.")
 
             return DomainPurchaseType(
                 id=purchase.id,
@@ -2356,12 +2357,12 @@ class SiteMutation:
             )
             site = result.scalar_one_or_none()
             if not site:
-                raise ValueError("Hemsida hittades inte")
+                raise ValueError("SITE_NOT_FOUND: Site not found")
 
             # Verify slug matches
             expected_slug = site.subdomain or site.id[:8]
             if slug.strip().lower() != expected_slug.lower():
-                raise ValueError("Slug matchar inte. Skriv korrekt slug för att bekräfta radering.")
+                raise ValueError("SLUG_MISMATCH: Slug does not match. Enter the correct slug to confirm deletion.")
 
             # Generate deletion token
             import secrets
@@ -2385,7 +2386,7 @@ class SiteMutation:
             try:
                 from app.email.service import _send_via_resend
                 from app.email.templates import build_site_deletion_email
-                site_name = site.lead.business_name if site.lead else "Din hemsida"
+                site_name = site.lead.business_name if site.lead else "Your site"
                 from app.config import settings
                 subject, html, text = build_site_deletion_email(site_name, raw_token, frontend_url=settings.FRONTEND_URL, locale=user.locale)
                 await _send_via_resend(
@@ -2418,10 +2419,10 @@ class SiteMutation:
             )
             deletion_token = result.scalar_one_or_none()
             if not deletion_token:
-                raise ValueError("Ogiltig eller redan använd raderingstoken")
+                raise ValueError("INVALID_TOKEN: Invalid or already used deletion token")
 
             if deletion_token.expires_at < datetime.now(timezone.utc):
-                raise ValueError("Raderingstoken har gått ut. Begär en ny radering.")
+                raise ValueError("TOKEN_EXPIRED: Deletion token has expired. Please request a new deletion.")
 
             # Mark token as used
             deletion_token.used_at = datetime.now(timezone.utc)
@@ -2434,7 +2435,7 @@ class SiteMutation:
             )
             site = site_result.scalar_one_or_none()
             if not site:
-                raise ValueError("Hemsida hittades inte")
+                raise ValueError("SITE_NOT_FOUND: Site not found")
 
             site.deleted_at = datetime.now(timezone.utc)
             site.previous_status = site.status.value
@@ -2500,10 +2501,10 @@ class SiteMutation:
             )
             site = result.scalar_one_or_none()
             if not site:
-                raise ValueError("Hemsida hittades inte")
+                raise ValueError("SITE_NOT_FOUND: Site not found")
 
             if site.status == SiteStatus.PAUSED:
-                raise ValueError("Hemsidan är redan pausad")
+                raise ValueError("ALREADY_PAUSED: Site is already paused")
 
             site.previous_status = site.status.value
             site.status = SiteStatus.PAUSED
@@ -2540,10 +2541,10 @@ class SiteMutation:
             )
             site = result.scalar_one_or_none()
             if not site:
-                raise ValueError("Hemsida hittades inte")
+                raise ValueError("SITE_NOT_FOUND: Site not found")
 
             if site.status != SiteStatus.PAUSED:
-                raise ValueError("Hemsidan är inte pausad")
+                raise ValueError("NOT_PAUSED: Site is not paused")
 
             prev = site.previous_status
             site.status = SiteStatus(prev) if prev and prev != "PAUSED" else SiteStatus.PUBLISHED
@@ -2587,7 +2588,7 @@ class SiteMutation:
             )
             site = result.scalar_one_or_none()
             if not site:
-                raise ValueError("Hemsida hittades inte")
+                raise ValueError("SITE_NOT_FOUND: Site not found")
 
             # Merge settings into site_data
             site_data = dict(site.site_data) if site.site_data else {}
@@ -2676,7 +2677,7 @@ class SiteMutation:
                 site_id=site_id,
                 version_number=next_num,
                 site_data=version.site_data,
-                label=f"Återställd från v{version.version_number}",
+                label=f"Restored from v{version.version_number}",
             )
             db.add(snapshot)
 

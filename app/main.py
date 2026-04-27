@@ -13,6 +13,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.autoblogger.exceptions import AutoBloggerError, autoblogger_exception_handler
 from app.autoblogger.middleware import RequestIDMiddleware
 
+import re
+
 from sqlalchemy import text
 
 from app.cache import cache
@@ -38,6 +40,23 @@ from app.feyra.models import FeyraBase, FEYRA_SCHEMA, EmailAccount, WarmupSettin
 
 logger = logging.getLogger(__name__)
 
+_SAFE_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _quoted_identifier(name: str) -> str:
+    """Return a safely-quoted SQL identifier, or raise if the name is invalid.
+
+    Only allows simple alphanumeric/underscore names to prevent SQL injection
+    when interpolating schema names (which cannot be parameterised in standard SQL).
+    """
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(
+            f"Invalid SQL identifier: {name!r}. "
+            "Only alphanumeric characters and underscores are allowed."
+        )
+    # Double-quote the identifier to handle reserved words safely
+    return f'"{name}"'
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -49,13 +68,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.error("Database connection failed: %s", e)
             raise RuntimeError("Cannot connect to database") from e
-        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quoted_identifier(SCHEMA)}"))
         await conn.run_sync(Base.metadata.create_all)
         # AutoBlogger schema
-        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AUTOBLOGGER_SCHEMA}"))
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quoted_identifier(AUTOBLOGGER_SCHEMA)}"))
         await conn.run_sync(AutoBloggerBase.metadata.create_all)
         # Feyra schema
-        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {FEYRA_SCHEMA}"))
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quoted_identifier(FEYRA_SCHEMA)}"))
         await conn.run_sync(FeyraBase.metadata.create_all)
 
     # Verify Supabase Storage connectivity
@@ -435,7 +454,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
-    allow_origin_regex=r"https?://(.+\.)?" + settings.BASE_DOMAIN.replace(".", r"\.") + r"(:\d+)?",
+    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)?" + settings.BASE_DOMAIN.replace(".", r"\.") + r"(:\d+)?$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],

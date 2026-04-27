@@ -4,6 +4,8 @@ from datetime import datetime
 
 import strawberry
 
+from app.graphql.pagination import PaginatedListType, PaginationInput
+
 
 @strawberry.type
 class UserType:
@@ -57,6 +59,30 @@ class UpdateProfileInput:
     locale: str | None = None
     country: str | None = None
 
+    _MAX_NAME = 200
+    _MAX_COMPANY = 200
+    _MAX_ORG = 50
+    _MAX_PHONE = 30
+    _MAX_URL = 2048
+    _MAX_LOCALE = 10
+    _MAX_COUNTRY = 3
+
+    def __post_init__(self) -> None:
+        if self.full_name and len(self.full_name) > self._MAX_NAME:
+            raise ValueError(f"full_name exceeds max length of {self._MAX_NAME}")
+        if self.company_name and len(self.company_name) > self._MAX_COMPANY:
+            raise ValueError(f"company_name exceeds max length of {self._MAX_COMPANY}")
+        if self.org_number and len(self.org_number) > self._MAX_ORG:
+            raise ValueError(f"org_number exceeds max length of {self._MAX_ORG}")
+        if self.phone and len(self.phone) > self._MAX_PHONE:
+            raise ValueError(f"phone exceeds max length of {self._MAX_PHONE}")
+        if self.avatar_url and len(self.avatar_url) > self._MAX_URL:
+            raise ValueError(f"avatar_url exceeds max length of {self._MAX_URL}")
+        if self.locale and len(self.locale) > self._MAX_LOCALE:
+            raise ValueError(f"locale exceeds max length of {self._MAX_LOCALE}")
+        if self.country and len(self.country) > self._MAX_COUNTRY:
+            raise ValueError(f"country exceeds max length of {self._MAX_COUNTRY}")
+
 
 @strawberry.type
 class AdminUserType:
@@ -79,11 +105,8 @@ class AdminUserType:
 
 
 @strawberry.type
-class AdminUserListType:
+class AdminUserListType(PaginatedListType):
     items: list[AdminUserType]
-    total: int
-    page: int
-    page_size: int
 
 
 @strawberry.type
@@ -96,13 +119,11 @@ class AdminUserStatsType:
 
 
 @strawberry.input
-class AdminUserFilterInput:
+class AdminUserFilterInput(PaginationInput):
     search: str | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
     has_subscription: bool | None = None
-    page: int = 1
-    page_size: int = 20
 
 
 @strawberry.type
@@ -172,3 +193,83 @@ class AdminUpdateUserInput:
 class ChangePasswordInput:
     current_password: str
     new_password: str
+
+    def __post_init__(self) -> None:
+        if len(self.current_password) > 256:
+            raise ValueError("current_password exceeds max length of 256")
+        if len(self.new_password) > 256:
+            raise ValueError("new_password exceeds max length of 256")
+
+
+# ---------------------------------------------------------------------------
+# Result union types (Success | Error pattern)
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class MutationSuccess:
+    """Indicates a successful mutation."""
+    success: bool = True
+    message: str = "OK"
+
+
+@strawberry.type
+class MutationError:
+    """Indicates a failed mutation with an error code and message."""
+    success: bool = False
+    error_code: str = "UNKNOWN_ERROR"
+    message: str = "An error occurred"
+
+
+@strawberry.type
+class UpdateProfileSuccess:
+    """Successful profile update."""
+    success: bool = True
+    user: UserType | None = None
+
+
+UpdateProfileResult = strawberry.union(
+    "UpdateProfileResult", types=[UpdateProfileSuccess, MutationError]
+)
+
+@strawberry.type
+class ChangePasswordSuccess:
+    """Successful password change."""
+    success: bool = True
+
+
+ChangePasswordResult = strawberry.union(
+    "ChangePasswordResult", types=[ChangePasswordSuccess, MutationError]
+)
+
+@strawberry.type
+class RevokeSessionSuccess:
+    """Successful session revocation."""
+    success: bool = True
+
+
+RevokeSessionResult = strawberry.union(
+    "RevokeSessionResult", types=[RevokeSessionSuccess, MutationError]
+)
+
+@strawberry.type
+class RevokeAllSessionsSuccess:
+    """Successful revocation of all sessions."""
+    success: bool = True
+    revoked_count: int = 0
+
+
+RevokeAllSessionsResult = strawberry.union(
+    "RevokeAllSessionsResult", types=[RevokeAllSessionsSuccess, MutationError]
+)
+
+
+@strawberry.type
+class AdminUpdateUserSuccess:
+    """Successful admin user update."""
+    success: bool = True
+    user: "AdminUserDetailType | None" = None
+
+
+AdminUpdateUserResult = strawberry.union(
+    "AdminUpdateUserResult", types=[AdminUpdateUserSuccess, MutationError]
+)

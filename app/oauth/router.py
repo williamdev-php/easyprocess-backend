@@ -21,6 +21,7 @@ from app.oauth.service import (
     get_user_sites_for_oauth,
     revoke_access_token,
     validate_client,
+    validate_redirect_uri,
     validate_scopes,
 )
 
@@ -106,6 +107,9 @@ async def authorize(
     if scopes is None:
         raise HTTPException(status_code=400, detail="Invalid scopes")
 
+    if not validate_redirect_uri(body.client_id, body.redirect_uri):
+        raise HTTPException(status_code=400, detail="Invalid redirect_uri")
+
     raw_code = await create_authorization_code(
         db,
         client_id=body.client_id,
@@ -129,6 +133,9 @@ async def token_exchange(
     db: AsyncSession = Depends(get_db),
 ):
     """Exchange an authorization code for an access token."""
+    if not validate_redirect_uri(body.client_id, body.redirect_uri):
+        raise HTTPException(status_code=400, detail="Invalid redirect_uri")
+
     result = await exchange_code_for_token(
         db,
         client_id=body.client_id,

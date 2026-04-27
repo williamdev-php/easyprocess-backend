@@ -125,10 +125,10 @@ class User(Base):
 
     # Relationships
     sessions: Mapped[list["Session"]] = relationship(
-        "Session", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "Session", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
     social_accounts: Mapped[list["SocialAccount"]] = relationship(
-        "SocialAccount", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "SocialAccount", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
 
 
@@ -158,7 +158,7 @@ class Session(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    user: Mapped[User] = relationship("User", back_populates="sessions", lazy="selectin")
+    user: Mapped[User] = relationship("User", back_populates="sessions", lazy="select")
 
     __table_args__ = (
         Index("idx_sessions_user_id", "user_id"),
@@ -213,7 +213,7 @@ class SocialAccount(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    user: Mapped[User] = relationship("User", back_populates="social_accounts", lazy="selectin")
+    user: Mapped[User] = relationship("User", back_populates="social_accounts", lazy="select")
 
     __table_args__ = (
         Index("idx_social_provider_uid", "provider", "provider_user_id", unique=True),

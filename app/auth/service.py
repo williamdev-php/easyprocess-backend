@@ -69,8 +69,17 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(48)
 
 
-def compute_device_fingerprint(user_agent: str | None, ip_address: str | None) -> str:
-    """Compute a stable device fingerprint from user-agent and IP subnet.
+def compute_device_fingerprint(
+    user_agent: str | None,
+    ip_address: str | None,
+    accept_language: str | None = None,
+    sec_ch_ua: str | None = None,
+) -> str:
+    """Compute a stable device fingerprint from multiple browser signals.
+
+    Combines user-agent, IP subnet, Accept-Language, and Sec-CH-UA client
+    hints to produce a stronger fingerprint that is harder to spoof with
+    just a single header.
 
     Uses the /24 subnet (IPv4) or /48 prefix (IPv6) so that minor IP changes
     (e.g. DHCP renewal within the same network) don't break trust.
@@ -86,7 +95,9 @@ def compute_device_fingerprint(user_agent: str | None, ip_address: str | None) -
             # IPv4 — use first 3 octets (/24)
             octets = ip_address.split(".")
             ip_part = ".".join(octets[:3])
-    raw = f"{ua_part}|{ip_part}"
+    lang_part = (accept_language or "").strip()
+    ch_ua_part = (sec_ch_ua or "").strip()
+    raw = f"{ua_part}|{ip_part}|{lang_part}|{ch_ua_part}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -112,6 +123,8 @@ async def create_session(
     ip_address: str | None = None,
     user_agent: str | None = None,
     trust_device: bool = False,
+    accept_language: str | None = None,
+    sec_ch_ua: str | None = None,
 ) -> tuple[Session, str]:
     """Create a new session and return (session, raw_token).
 
@@ -120,7 +133,9 @@ async def create_session(
     """
     raw_token = generate_session_token()
     now = datetime.now(timezone.utc)
-    fingerprint = compute_device_fingerprint(user_agent, ip_address)
+    fingerprint = compute_device_fingerprint(
+        user_agent, ip_address, accept_language, sec_ch_ua,
+    )
 
     # Auto-trust if this device was previously trusted by the user
     is_trusted = trust_device or await _has_trusted_device(db, user_id, fingerprint)

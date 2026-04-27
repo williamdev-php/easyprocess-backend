@@ -181,6 +181,7 @@ class Lead(Base):
         Index("idx_leads_website_url", "website_url"),
         Index("idx_leads_created_by", "created_by"),
         Index("idx_leads_industry_id", "industry_id"),
+        Index("idx_leads_created_by_status", "created_by", "status"),
         {"schema": SCHEMA},
     )
 
@@ -454,9 +455,9 @@ class InboundEmail(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
 
     # Envelope
-    from_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    from_email: Mapped[str] = mapped_column(String(255), nullable=False)
     from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    to_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    to_email: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Content
@@ -472,7 +473,7 @@ class InboundEmail(Base):
 
     # Lead matching
     matched_lead_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey(f"{SCHEMA}.leads.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36), ForeignKey(f"{SCHEMA}.leads.id", ondelete="SET NULL"), nullable=True
     )
 
     # Status
@@ -488,6 +489,16 @@ class InboundEmail(Base):
 
     # Relationships
     matched_lead: Mapped["Lead | None"] = relationship("Lead", foreign_keys=[matched_lead_id])
+
+    __table_args__ = (
+        Index("idx_inbound_emails_from_email", "from_email"),
+        Index("idx_inbound_emails_to_email", "to_email"),
+        Index("idx_inbound_emails_matched_lead_id", "matched_lead_id"),
+        Index("idx_inbound_emails_category_read", "category", "is_read"),
+        Index("idx_inbound_emails_created_at", "created_at"),
+        Index("idx_inbound_emails_lead_category", "matched_lead_id", "category"),
+        {"schema": SCHEMA},
+    )
 
 
 class CustomDomain(Base):

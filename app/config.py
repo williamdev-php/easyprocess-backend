@@ -1,8 +1,11 @@
 import logging
+import secrets
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_SECRET_KEY = "qvicko-dev-secret-key-change-in-production"
 
 
 class Settings(BaseSettings):
@@ -19,13 +22,14 @@ class Settings(BaseSettings):
     # Pooler URL for IPv4 networks (dev), Direct URL for IPv6 networks (production)
     DATABASE_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/postgres"
     DATABASE_URL_DIRECT: str = ""
+    DATABASE_READ_REPLICA_URL: str = ""  # Optional read-replica URL for read-heavy queries
 
     # Auth / JWT
-    SECRET_KEY: str = "qvicko-dev-secret-key-change-in-production"
+    SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    MASTER_SESSION_EXPIRE_DAYS: int = 90  # Long-lived master session for trusted devices
-    TRUSTED_DEVICE_REFRESH_DAYS: int = 30  # Refresh token lifetime for trusted devices
+    MASTER_SESSION_EXPIRE_DAYS: int = 30  # Long-lived master session for trusted devices
+    TRUSTED_DEVICE_REFRESH_DAYS: int = 14  # Refresh token lifetime for trusted devices
     JWT_ALGORITHM: str = "HS256"
 
     # Supabase Storage
@@ -165,13 +169,21 @@ class Settings(BaseSettings):
 
     def validate_production_secrets(self) -> None:
         """Raise on startup if production is using insecure defaults."""
+        # Ensure SECRET_KEY is always set to something secure
+        if not self.SECRET_KEY:
+            if self.ENVIRONMENT == "production":
+                raise RuntimeError(
+                    "FATAL: SECRET_KEY environment variable is not set. "
+                    "Set a strong, unique SECRET_KEY for production."
+                )
+            # Non-production: generate an ephemeral random key and warn
+            self.SECRET_KEY = secrets.token_urlsafe(64)  # type: ignore[assignment]
+            logger.warning(
+                "SECRET_KEY is not set — generated an ephemeral random key. "
+                "Sessions will NOT survive restarts. Set SECRET_KEY in your .env file."
+            )
         if self.ENVIRONMENT != "production":
             return
-        if self.SECRET_KEY == "qvicko-dev-secret-key-change-in-production":
-            raise RuntimeError(
-                "FATAL: Production is using the default SECRET_KEY. "
-                "Set a strong, unique SECRET_KEY environment variable."
-            )
         required = {
             "DATABASE_URL": self.DATABASE_URL,
             "RESEND_API_KEY": self.RESEND_API_KEY,

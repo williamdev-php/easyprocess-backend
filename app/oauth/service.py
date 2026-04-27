@@ -49,6 +49,15 @@ def validate_scopes(client_id: str, requested: list[str]) -> list[str] | None:
     return requested
 
 
+def validate_redirect_uri(client_id: str, redirect_uri: str) -> bool:
+    """Validate that redirect_uri is in the client's allowed whitelist."""
+    client = validate_client(client_id)
+    if not client:
+        return False
+    allowed_uris = client.get("allowed_redirect_uris", [])
+    return redirect_uri in allowed_uris
+
+
 # ------------------------------------------------------------------
 # Site listing (for the authorize page)
 # ------------------------------------------------------------------
@@ -119,6 +128,9 @@ async def create_authorization_code(
     state: str | None = None,
 ) -> str:
     """Create a short-lived authorization code.  Returns the raw code."""
+    if not validate_redirect_uri(client_id, redirect_uri):
+        raise ValueError(f"redirect_uri is not in the allowed whitelist for client '{client_id}'")
+
     raw_code = secrets.token_urlsafe(48)
 
     code = OAuthAuthorizationCode(

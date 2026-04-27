@@ -41,6 +41,36 @@ from app.sites.models import (
 
 logger = logging.getLogger(__name__)
 
+# Crawl cache TTL in seconds — configurable per use-case.
+# Static/brochure sites change rarely → longer TTL.
+# Dynamic sites (blogs, e-commerce) → shorter TTL.
+_CACHE_TTL_BY_INDUSTRY: dict[str, int] = {
+    # Static / brochure-like industries → 24 hours
+    "bygg": 86400,
+    "redovisning": 86400,
+    "juridik": 86400,
+    "el": 86400,
+    "elektriker": 86400,
+    "vvs": 86400,
+    "tandvård": 86400,
+    "frisör": 86400,
+    "skönhet": 86400,
+    "städ": 86400,
+    # More dynamic industries → 4 hours
+    "restaurang": 14400,
+    "fitness": 14400,
+    "it": 14400,
+}
+_DEFAULT_CACHE_TTL = 86400  # 24 hours default (most sites are static brochure sites)
+
+
+def _get_cache_ttl(industry: str | None) -> int:
+    """Return the cache TTL for a given industry, falling back to default."""
+    if industry:
+        return _CACHE_TTL_BY_INDUSTRY.get(industry.lower(), _DEFAULT_CACHE_TTL)
+    return _DEFAULT_CACHE_TTL
+
+
 if sys.version_info >= (3, 11):
     _timeout = asyncio.timeout
 else:
@@ -164,13 +194,15 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
             lead.status = LeadStatus.SCRAPED
             await db.commit()
 
-            # Cache scrape results for 1 hour (speeds up re-generation of same URL)
+            # Cache scrape results (TTL varies by industry)
             try:
+                cache_ttl = _get_cache_ttl(lead.industry)
                 cacheable_data = {
                     k: v for k, v in data.items()
                     if k not in ("visual_analysis",)  # exclude non-serializable/large data
                 }
-                await cache.set(scrape_cache_key, cacheable_data, ttl=3600)
+                await cache.set(scrape_cache_key, cacheable_data, ttl=cache_ttl)
+                logger.debug("Cached scrape data for %s (TTL=%ds)", lead.website_url, cache_ttl)
             except Exception:
                 logger.debug("Failed to cache scrape data for %s", lead.website_url)
 
@@ -203,7 +235,7 @@ async def run_pipeline(db: AsyncSession, lead_id: str) -> None:
                                     img for img in subpage_images
                                     if img.get("url") and img["url"] not in existing_urls
                                 ]
-                                data["images"].extend(new_images[:20])
+                                data["images"].extend(new_images[:30])
                                 logger.info(
                                     "Added %d subpage images (total: %d)",
                                     len(new_images[:20]), len(data["images"]),

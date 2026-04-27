@@ -26,7 +26,7 @@ from app.scraper.extractor import fetch_page, _extract_texts, _extract_images, _
 logger = logging.getLogger(__name__)
 
 # --- Configuration -----------------------------------------------------------
-MAX_SUBPAGES = 8            # max internal pages to crawl (excluding homepage)
+MAX_SUBPAGES = 20           # max internal pages to crawl (excluding homepage)
 FETCH_TIMEOUT = 12.0        # seconds per subpage fetch
 CONCURRENCY = 4             # parallel fetches
 

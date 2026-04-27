@@ -650,12 +650,60 @@ def _extract_images(soup: BeautifulSoup, base_url: str) -> list[dict]:
     images = []
     seen_urls = set()
 
-    def _add_image(url: str, alt: str, category: str, width: int | None = None, height: int | None = None):
+    def _generate_alt_text(url: str, category: str, element=None) -> str:
+        """Generate descriptive alt text for images that lack it."""
+        # Try to get context from nearby text elements
+        if element is not None and hasattr(element, "find_parent"):
+            # Check for a figcaption sibling
+            figure = element.find_parent("figure")
+            if figure:
+                figcaption = figure.find("figcaption")
+                if figcaption and figcaption.get_text(strip=True):
+                    return figcaption.get_text(strip=True)[:120]
+            # Check for a title attribute
+            title = element.get("title", "").strip() if hasattr(element, "get") else ""
+            if title:
+                return title[:120]
+            # Check for aria-label
+            aria = element.get("aria-label", "").strip() if hasattr(element, "get") else ""
+            if aria:
+                return aria[:120]
+            # Try nearby heading
+            parent_section = element.find_parent(["section", "div", "article"])
+            if parent_section:
+                heading = parent_section.find(["h1", "h2", "h3", "h4"])
+                if heading and heading.get_text(strip=True):
+                    return f"{heading.get_text(strip=True)[:80]} — bild"
+        # Fallback: derive from filename in URL
+        try:
+            from urllib.parse import urlparse as _urlparse
+            path = _urlparse(url).path
+            filename = path.rsplit("/", 1)[-1].rsplit(".", 1)[0] if "/" in path else ""
+            if filename and len(filename) > 3:
+                # Clean up filename: replace hyphens/underscores with spaces
+                cleaned = filename.replace("-", " ").replace("_", " ").strip()
+                if cleaned and not cleaned.isdigit():
+                    return cleaned[:100]
+        except Exception:
+            pass
+        # Last resort: use category
+        category_labels = {
+            "hero": "Hero-bild",
+            "gallery": "Galleribild",
+            "team": "Teammedlem",
+            "general": "Bild",
+        }
+        return category_labels.get(category, "Bild")
+
+    def _add_image(url: str, alt: str, category: str, width: int | None = None, height: int | None = None, element=None):
         if url in seen_urls:
             return
         seen_urls.add(url)
         # Also try without resize params
         clean_url = _strip_resize_params(url)
+        # Ensure alt text exists — generate if missing
+        if not alt or not alt.strip():
+            alt = _generate_alt_text(url, category, element)
         img_data = {"url": clean_url, "alt": alt, "category": category}
         if width:
             img_data["width"] = width
@@ -695,7 +743,7 @@ def _extract_images(soup: BeautifulSoup, base_url: str) -> list[dict]:
             src_lower = best_url.lower()
             if not any(kw in src_lower for kw in _SMALL_IMAGE_KEYWORDS):
                 category = _categorize_image(picture, "general")
-                _add_image(best_url, alt, category)
+                _add_image(best_url, alt, category, element=picture)
 
     # 2. <img> tags — prefer srcset for higher resolution
     for img in soup.find_all("img"):
@@ -730,7 +778,7 @@ def _extract_images(soup: BeautifulSoup, base_url: str) -> list[dict]:
             continue
 
         category = _categorize_image(img, "general")
-        _add_image(best_url, alt, category, width, height)
+        _add_image(best_url, alt, category, width, height, element=img)
 
         if len(images) >= 30:
             break
@@ -745,7 +793,7 @@ def _extract_images(soup: BeautifulSoup, base_url: str) -> list[dict]:
                 continue
             # Background images are often hero/banner images
             category = _categorize_image(tag, "hero")
-            _add_image(url, "", category)
+            _add_image(url, "", category, element=tag)
 
         if len(images) >= 30:
             break

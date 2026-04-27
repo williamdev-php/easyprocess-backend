@@ -234,10 +234,10 @@ class TestGetOrCreateStripeCustomer:
         assert user.stripe_customer_id == customer_id
         _cleanup_customers.append(customer_id)
 
-        # Verify it exists in Stripe
+        # Verify it exists in Stripe (PII like email/name is not sent)
         customer = stripe.Customer.retrieve(customer_id)
-        assert customer.email == user.email
-        assert customer.name == user.full_name
+        assert customer.email is None
+        assert customer.name is None
         assert customer.metadata["qvicko_user_id"] == user.id
 
     @pytest.mark.asyncio
@@ -1076,9 +1076,9 @@ class TestFullPurchaseFlow:
         assert customer_id.startswith("cus_")
         _cleanup_customers.append(customer_id)
 
-        # Verify customer in Stripe
+        # Verify customer in Stripe (PII like email is not sent)
         cust = stripe.Customer.retrieve(customer_id)
-        assert cust.email == user.email
+        assert cust.metadata["qvicko_user_id"] == user.id
 
         # 2. Create setup intent
         si_result = await create_setup_intent(db, user)

@@ -103,6 +103,20 @@ class MetaInfo(BaseModel):
     og_image: str | None = None
     favicon_url: str | None = None
     language: str = "sv"
+    viewport: str = "width=device-width, initial-scale=1"
+    theme_color: str | None = None  # hex color for browser chrome, e.g. "#2563eb"
+    # Open Graph meta tags
+    og_title: str | None = None      # defaults to title if not set
+    og_description: str | None = None  # defaults to description if not set
+    og_type: str = "website"
+    og_url: str | None = None
+    og_site_name: str | None = None
+    # Twitter Card meta tags
+    twitter_card: str = "summary_large_image"
+    twitter_title: str | None = None   # defaults to og_title or title
+    twitter_description: str | None = None  # defaults to og_description or description
+    twitter_image: str | None = None   # defaults to og_image
+    twitter_site: str | None = None    # e.g. "@mybusiness"
 
 
 class OpeningHoursDay(BaseModel):

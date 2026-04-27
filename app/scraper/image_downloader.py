@@ -27,8 +27,8 @@ _DOWNLOAD_TIMEOUT = 15.0
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"}
 
 # Minimum dimensions for gallery-quality images
-_MIN_WIDTH = 200
-_MIN_HEIGHT = 200
+_MIN_WIDTH = 600
+_MIN_HEIGHT = 400
 
 
 def _check_image_dimensions(data: bytes, content_type: str) -> tuple[int, int] | None:

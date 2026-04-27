@@ -3,7 +3,7 @@ import time
 from collections import defaultdict
 
 import strawberry
-from strawberry.extensions import SchemaExtension
+from strawberry.extensions import SchemaExtension, QueryDepthLimiter
 from strawberry.fastapi import GraphQLRouter
 
 from app.auth.resolvers import Mutation as AuthMutation, Query as AuthQuery
@@ -59,6 +59,9 @@ class GraphQLRateLimitExtension(SchemaExtension):
             and getattr(doc.definitions[0], "operation", None)
             == OperationType.MUTATION
         )
+
+        rate_limit_info: dict = {}
+
         if is_mutation:
             ip = request.client.host if request.client else "unknown"
             now = time.monotonic()
@@ -68,14 +71,26 @@ class GraphQLRateLimitExtension(SchemaExtension):
             cutoff = now - self.WINDOW_SECONDS
             self._buckets[ip] = bucket = [t for t in bucket if t > cutoff]
 
+            remaining = max(0, self.MAX_MUTATIONS - len(bucket))
+            rate_limit_info = {
+                "rateLimit": {
+                    "limit": self.MAX_MUTATIONS,
+                    "remaining": remaining,
+                    "resetInSeconds": self.WINDOW_SECONDS,
+                }
+            }
+
             if len(bucket) >= self.MAX_MUTATIONS:
                 logger.warning("GraphQL rate limit exceeded for IP %s", ip)
                 from graphql import GraphQLError
                 raise GraphQLError(
-                    f"Rate limit exceeded. Max {self.MAX_MUTATIONS} mutations per minute."
+                    f"Rate limit exceeded. Max {self.MAX_MUTATIONS} mutations per minute.",
+                    extensions=rate_limit_info,
                 )
 
             bucket.append(now)
+            # Update remaining after recording this request
+            rate_limit_info["rateLimit"]["remaining"] = max(0, self.MAX_MUTATIONS - len(bucket))
 
             # --- Per-mutation type rate limit for heavy operations ---
             selections = getattr(doc.definitions[0], "selection_set", None)
@@ -92,6 +107,12 @@ class GraphQLRateLimitExtension(SchemaExtension):
                             self._heavy_buckets[heavy_key] = h_bucket = [
                                 t for t in h_bucket if t > h_cutoff
                             ]
+                            heavy_remaining = max(0, max_allowed - len(h_bucket))
+                            rate_limit_info["rateLimit"][name_str] = {
+                                "limit": max_allowed,
+                                "remaining": heavy_remaining,
+                                "resetInSeconds": self._HEAVY_WINDOW_SECONDS,
+                            }
                             if len(h_bucket) >= max_allowed:
                                 logger.warning(
                                     "Heavy mutation rate limit exceeded: %s for IP %s",
@@ -100,11 +121,23 @@ class GraphQLRateLimitExtension(SchemaExtension):
                                 from graphql import GraphQLError
                                 raise GraphQLError(
                                     f"Rate limit exceeded for {name_str}. "
-                                    f"Max {max_allowed} per minute."
+                                    f"Max {max_allowed} per minute.",
+                                    extensions=rate_limit_info,
                                 )
                             h_bucket.append(now)
+                            rate_limit_info["rateLimit"][name_str]["remaining"] = max(
+                                0, max_allowed - len(h_bucket)
+                            )
 
         yield
+
+        # Attach rate limit info to response extensions so clients can see usage
+        if rate_limit_info:
+            result = self.execution_context.result
+            if result is not None:
+                if result.extensions is None:
+                    result.extensions = {}
+                result.extensions.update(rate_limit_info)
 
 
 @strawberry.type
@@ -120,7 +153,7 @@ class Mutation(AuthMutation, SiteMutation, BillingMutation, MediaMutation, Suppo
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
-    extensions=[GraphQLRateLimitExtension],
+    extensions=[GraphQLRateLimitExtension, QueryDepthLimiter(max_depth=10)],
 )
 
 graphql_app = GraphQLRouter(schema)

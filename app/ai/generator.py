@@ -334,6 +334,78 @@ def _deduplicate_pages_vs_sections(site_data: dict) -> None:
             p["title"] = p["title"][:29].rstrip() + "…"
 
 
+# Standard routes that always exist in the viewer
+_STANDARD_ROUTES = {
+    "/about", "/services", "/gallery", "/faq", "/contact",
+    "/blog", "/bookings", "/",
+}
+
+
+def _validate_cta_links(site_data: dict) -> None:
+    """Validate all CTA/button hrefs in the generated site data.
+
+    Checks that internal links (starting with /) point to either a standard
+    route or a custom page slug defined in site_data['pages'].
+    Invalid internal links are replaced with '/contact' as a safe fallback.
+    External URLs (http/https/mailto/tel) are left as-is.
+    """
+    # Build set of valid internal paths
+    valid_paths = set(_STANDARD_ROUTES)
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for p in pages:
+            if isinstance(p, dict):
+                slug = p.get("slug", "")
+                if slug:
+                    valid_paths.add(f"/{slug}")
+                    # Also allow parent/child paths
+                    parent = p.get("parent_slug")
+                    if parent:
+                        valid_paths.add(f"/{parent}/{slug}")
+
+    def _fix_href(href: str) -> str:
+        """Return the href if valid, or a fallback."""
+        if not href or not isinstance(href, str):
+            return "/contact"
+        href = href.strip()
+        # External URLs, mailto:, tel: are always valid
+        if href.startswith(("http://", "https://", "mailto:", "tel:")):
+            return href
+        # Anchor links are discouraged but not broken
+        if href.startswith("#"):
+            return "/contact"
+        # Internal path — must match a known route or page slug
+        if href.startswith("/"):
+            if href in valid_paths:
+                return href
+            # Try without trailing slash
+            normalized = href.rstrip("/")
+            if normalized in valid_paths:
+                return normalized
+            logger.info("Validate links: invalid internal href '%s' — replacing with '/contact'", href)
+            return "/contact"
+        # Bare slug without leading slash — add slash and check
+        with_slash = f"/{href}"
+        if with_slash in valid_paths:
+            return with_slash
+        return "/contact"
+
+    def _walk_and_fix(obj):
+        """Recursively walk dicts/lists and fix any href fields in CTA/button objects."""
+        if isinstance(obj, dict):
+            # Fix href in CTA-like objects (have both label and href)
+            if "href" in obj and ("label" in obj or "text" in obj):
+                obj["href"] = _fix_href(obj["href"])
+            # Recurse into all values
+            for v in obj.values():
+                _walk_and_fix(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk_and_fix(item)
+
+    _walk_and_fix(site_data)
+
+
 def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
@@ -388,6 +460,9 @@ def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None
     # Deduplicate: if a custom page covers a standard section, null out the
     # top-level section so the viewer doesn't show both in navigation.
     _deduplicate_pages_vs_sections(site_data)
+
+    # Validate CTA hrefs — ensure all internal links point to real pages/routes
+    _validate_cta_links(site_data)
 
 
 async def generate_site(

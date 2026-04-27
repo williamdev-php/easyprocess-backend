@@ -8,6 +8,8 @@ from strawberry.types import Info
 
 from app.auth.graphql_types import (
     AdminUpdateUserInput,
+    AdminUpdateUserResult,
+    AdminUpdateUserSuccess,
     AdminUserDetailType,
     AdminUserFilterInput,
     AdminUserListType,
@@ -16,8 +18,17 @@ from app.auth.graphql_types import (
     AdminUserType,
     AuditLogType,
     ChangePasswordInput,
+    ChangePasswordResult,
+    ChangePasswordSuccess,
+    MutationError,
+    RevokeAllSessionsResult,
+    RevokeAllSessionsSuccess,
+    RevokeSessionResult,
+    RevokeSessionSuccess,
     SessionType,
     UpdateProfileInput,
+    UpdateProfileResult,
+    UpdateProfileSuccess,
     UserType,
 )
 from app.auth.models import AuditEventType, AuditLog, Session, User
@@ -87,6 +98,13 @@ def _require_user(user: User | None) -> User:
     return user
 
 
+def _require_superuser(user: User) -> User:
+    """Verify that the authenticated user has superuser privileges."""
+    if not user.is_superuser:
+        raise PermissionError("Superuser access required")
+    return user
+
+
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
@@ -94,12 +112,16 @@ def _require_user(user: User | None) -> User:
 @strawberry.type
 class Query:
 
-    @strawberry.field
+    # ------------------------------------------------------------------
+    # User queries (authenticated user)
+    # ------------------------------------------------------------------
+
+    @strawberry.field(description="Get the currently authenticated user's profile.")
     async def me(self, info: Info) -> UserType | None:
         user = await _get_user_from_info(info)
         return _user_to_gql(user) if user else None
 
-    @strawberry.field
+    @strawberry.field(description="List the current user's active sessions.")
     async def my_sessions(self, info: Info) -> list[SessionType]:
         user = _require_user(await _get_user_from_info(info))
         request = info.context["request"]
@@ -138,14 +160,17 @@ class Query:
             ]
 
     @strawberry.field
-    async def my_audit_log(self, info: Info, limit: int = 50, offset: int = 0) -> list[AuditLogType]:
+    async def my_audit_log(self, info: Info, page: int = 1, page_size: int = 50) -> list[AuditLogType]:
+        """Fetch the current user's audit log entries with pagination."""
         user = _require_user(await _get_user_from_info(info))
+        clamped_page_size = min(max(page_size, 1), 100)
+        offset = (max(page, 1) - 1) * clamped_page_size
         async with get_db_session() as db:
             result = await db.execute(
                 select(AuditLog)
                 .where(AuditLog.user_id == user.id)
                 .order_by(AuditLog.created_at.desc())
-                .limit(min(limit, 100))
+                .limit(clamped_page_size)
                 .offset(offset)
             )
             logs = result.scalars().all()
@@ -164,16 +189,14 @@ class Query:
     # Admin-only queries
     # ------------------------------------------------------------------
 
-    @strawberry.field
+    @strawberry.field(description="[Admin] List all users. Requires superuser privileges.")
     async def all_users(self, info: Info, filter: AdminUserFilterInput | None = None) -> AdminUserListType:
         """List all users (superadmin only)."""
-        user = _require_user(await _get_user_from_info(info))
-        if not user.is_superuser:
-            raise PermissionError("Superuser access required")
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
         f = filter or AdminUserFilterInput()
-        page_size = min(f.page_size, 50)
-        offset = (f.page - 1) * page_size
+        page_size = f.validated_page_size(max_size=50)
+        offset = f.offset(max_size=50)
 
         async with get_db_session() as db:
             query = select(User)
@@ -265,12 +288,10 @@ class Query:
                 page_size=page_size,
             )
 
-    @strawberry.field
+    @strawberry.field(description="[Admin] Aggregate user statistics. Requires superuser privileges.")
     async def admin_user_stats(self, info: Info) -> AdminUserStatsType:
         """Aggregate user stats (superadmin only)."""
-        user = _require_user(await _get_user_from_info(info))
-        if not user.is_superuser:
-            raise PermissionError("Superuser access required")
+        user = _require_superuser(_require_user(await _get_user_from_info(info)))
 
         async with get_db_session() as db:
             total = (await db.execute(select(func.count()).select_from(User))).scalar() or 0
@@ -295,17 +316,15 @@ class Query:
                 new_users_30d=new_30d,
             )
 
-    @strawberry.field
+    @strawberry.field(description="[Admin] Get full user details by ID. Requires superuser privileges.")
     async def admin_user(self, info: Info, id: str) -> AdminUserDetailType:
-        """Get full user details (superadmin only)."""
-        caller = _require_user(await _get_user_from_info(info))
-        if not caller.is_superuser:
-            raise PermissionError("Superuser access required")
+        """[Admin] Get full user details. Requires superuser privileges."""
+        caller = _require_superuser(_require_user(await _get_user_from_info(info)))
 
         async with get_db_session() as db:
             target = await get_user_by_id(db, id)
             if not target:
-                raise ValueError("User not found")
+                raise ValueError("USER_NOT_FOUND: User not found")
 
             # Sessions (active only)
             result = await db.execute(
@@ -423,19 +442,26 @@ class Query:
 @strawberry.type
 class Mutation:
 
+    # ------------------------------------------------------------------
+    # User mutations (authenticated user)
+    # ------------------------------------------------------------------
+
     @strawberry.mutation
-    async def update_profile(self, info: Info, input: UpdateProfileInput) -> UserType:
+    async def update_profile(self, info: Info, input: UpdateProfileInput) -> UpdateProfileResult:  # type: ignore[return]
         user = _require_user(await _get_user_from_info(info))
         async with get_db_session() as db:
             db_user = await get_user_by_id(db, user.id)
             if not db_user:
-                raise ValueError("User not found")
+                return MutationError(error_code="USER_NOT_FOUND", message="User not found")
 
             # Validate country code if provided
             if input.country is not None and input.country != "":
                 from app.auth.validators import VALID_COUNTRY_CODES
                 if input.country.upper() not in VALID_COUNTRY_CODES:
-                    raise ValueError(f"Invalid country code: {input.country}")
+                    return MutationError(
+                        error_code="INVALID_COUNTRY",
+                        message=f"Invalid country code: {input.country}",
+                    )
 
             updates = {k: v for k, v in {
                 "full_name": input.full_name,
@@ -454,18 +480,18 @@ class Mutation:
             await db.commit()
             await invalidate_user_cache(db_user.id, db_user.email)
             await db.refresh(db_user)
-            return _user_to_gql(db_user)
+            return UpdateProfileSuccess(user=_user_to_gql(db_user))
 
     @strawberry.mutation
-    async def change_password(self, info: Info, input: ChangePasswordInput) -> bool:
+    async def change_password(self, info: Info, input: ChangePasswordInput) -> ChangePasswordResult:  # type: ignore[return]
         user = _require_user(await _get_user_from_info(info))
         async with get_db_session() as db:
             db_user = await get_user_by_id(db, user.id)
             if not db_user or not db_user.password_hash:
-                raise ValueError("Cannot change password")
+                return MutationError(error_code="PASSWORD_CHANGE_DENIED", message="Cannot change password")
 
             if not verify_password(input.current_password, db_user.password_hash):
-                raise ValueError("Current password is incorrect")
+                return MutationError(error_code="INVALID_PASSWORD", message="Current password is incorrect")
 
             await change_password(db, db_user, input.new_password)
             await invalidate_user_cache(db_user.id, db_user.email)
@@ -476,10 +502,10 @@ class Mutation:
             await log_audit_event(db, AuditEventType.PASSWORD_CHANGE, db_user.id, ip, ua)
 
             await db.commit()
-            return True
+            return ChangePasswordSuccess()
 
     @strawberry.mutation
-    async def revoke_session(self, info: Info, session_id: str) -> bool:
+    async def revoke_session(self, info: Info, session_id: str) -> RevokeSessionResult:  # type: ignore[return]
         user = _require_user(await _get_user_from_info(info))
         async with get_db_session() as db:
             result = await db.execute(
@@ -489,7 +515,7 @@ class Mutation:
             )
             session = result.scalar_one_or_none()
             if not session:
-                raise ValueError("Session not found")
+                return MutationError(error_code="SESSION_NOT_FOUND", message="Session not found")
 
             await revoke_session(db, session.id)
 
@@ -499,10 +525,10 @@ class Mutation:
             await log_audit_event(db, AuditEventType.SESSION_REVOKED, user.id, ip, ua)
 
             await db.commit()
-            return True
+            return RevokeSessionSuccess()
 
     @strawberry.mutation
-    async def revoke_all_sessions(self, info: Info) -> int:
+    async def revoke_all_sessions(self, info: Info) -> RevokeAllSessionsResult:  # type: ignore[return]
         user = _require_user(await _get_user_from_info(info))
         async with get_db_session() as db:
             count = await revoke_all_user_sessions(db, user.id)
@@ -516,24 +542,31 @@ class Mutation:
             )
 
             await db.commit()
-            return count
+            return RevokeAllSessionsSuccess(revoked_count=count)
 
-    @strawberry.mutation
-    async def admin_update_user(self, info: Info, input: AdminUpdateUserInput) -> AdminUserDetailType:
+    # ------------------------------------------------------------------
+    # Admin-only mutations
+    # ------------------------------------------------------------------
+
+    @strawberry.mutation(description="[Admin] Update a user's profile or status. Requires superuser privileges.")
+    async def admin_update_user(self, info: Info, input: AdminUpdateUserInput) -> AdminUpdateUserResult:  # type: ignore[return]
         """Update a user's profile/status (superadmin only).
 
         Security:
         - Superuser promotion is rate-limited to max 1 per week.
         - Users cannot be hard-deleted via this mutation (soft delete only).
         """
-        caller = _require_user(await _get_user_from_info(info))
-        if not caller.is_superuser:
-            raise PermissionError("Superuser access required")
+        user = await _get_user_from_info(info)
+        if user is None:
+            return MutationError(error_code="AUTH_REQUIRED", message="Authentication required")
+        if not user.is_superuser:
+            return MutationError(error_code="FORBIDDEN", message="Superuser access required")
+        caller = user
 
         async with get_db_session() as db:
             target = await get_user_by_id(db, input.user_id)
             if not target:
-                raise ValueError("User not found")
+                return MutationError(error_code="USER_NOT_FOUND", message="User not found")
 
             # --- Superuser promotion rate limit: max 1 per week ---
             if input.is_superuser is not None and input.is_superuser and not target.is_superuser:
@@ -545,9 +578,9 @@ class Mutation:
                     .where(SuperuserPromotion.created_at >= one_week_ago)
                 )).scalar() or 0
                 if recent >= 1:
-                    raise ValueError(
-                        "Superuser promotion rate limit: max 1 promotion per week. "
-                        "Try again later."
+                    return MutationError(
+                        error_code="RATE_LIMITED",
+                        message="Superuser promotion rate limit: max 1 promotion per week. Try again later.",
                     )
 
             if input.full_name is not None:
@@ -593,4 +626,5 @@ class Mutation:
             await db.refresh(target)
 
         # Re-fetch via the query to return full detail
-        return await Query.admin_user(Query(), info, input.user_id)
+        detail = await Query.admin_user(Query(), info, input.user_id)
+        return AdminUpdateUserSuccess(user=detail)

@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuditEventType, AuditLog, Session, SettingsAuditLog, User
 from app.auth.schemas import (
+    AppleAuthRequest,
     ChangePasswordRequest,
+    GoogleAuthRequest,
     PasswordResetConfirm,
     PasswordResetRequest,
     ResendVerificationRequest,
@@ -20,6 +22,7 @@ from app.auth.schemas import (
     UserLogin,
     UserRegister,
     UserResponse,
+    VerifyEmailRequest,
 )
 from app.auth.service import (
     change_password,
@@ -60,6 +63,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
+
+
+def _fingerprint_headers(request: Request) -> dict:
+    """Extract headers used for device fingerprinting."""
+    return {
+        "accept_language": request.headers.get("accept-language"),
+        "sec_ch_ua": request.headers.get("sec-ch-ua"),
+    }
 
 
 def _cookie_max_age(is_trusted: bool) -> int:
@@ -119,7 +130,8 @@ async def register(
 
     # Trust the device on first registration
     session, raw_token = await create_session(
-        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True,
+        **_fingerprint_headers(request),
     )
     await log_audit_event(db, AuditEventType.REGISTER, user.id, ip, ua)
 
@@ -176,7 +188,8 @@ async def login(
 
     # Trust device on successful login (auto-trusts if fingerprint was previously trusted)
     session, raw_token = await create_session(
-        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True,
+        **_fingerprint_headers(request),
     )
     await log_audit_event(db, AuditEventType.LOGIN, user.id, ip, ua)
 
@@ -193,7 +206,7 @@ async def login(
 @router.post("/google", response_model=TokenResponse)
 @limiter.limit("10/minute")
 async def google_auth(
-    body: dict,
+    body: GoogleAuthRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -203,10 +216,10 @@ async def google_auth(
     Web flow: {code, redirect_uri, locale?}
     iOS flow: {access_token, locale?}
     """
-    code = body.get("code")
-    redirect_uri = body.get("redirect_uri")
-    google_access_token = body.get("access_token")
-    locale = body.get("locale", "sv")
+    code = body.code
+    redirect_uri = body.redirect_uri
+    google_access_token = body.access_token
+    locale = body.locale
 
     if not code and not google_access_token:
         raise HTTPException(status_code=400, detail="Missing code or access_token")
@@ -241,7 +254,8 @@ async def google_auth(
     await invalidate_user_cache(user.id, user.email)
 
     session, raw_token = await create_session(
-        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True,
+        **_fingerprint_headers(request),
     )
     await log_audit_event(
         db, AuditEventType.LOGIN, user.id, ip, ua,
@@ -261,19 +275,16 @@ async def google_auth(
 @router.post("/apple", response_model=TokenResponse)
 @limiter.limit("10/minute")
 async def apple_auth(
-    body: dict,
+    body: AppleAuthRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     """Authenticate with Apple Sign-In. Accepts {identity_token, full_name?, email?, locale?}."""
-    identity_token = body.get("identity_token")
-    full_name = body.get("full_name")
-    email_hint = body.get("email")
-    locale = body.get("locale", "sv")
-
-    if not identity_token:
-        raise HTTPException(status_code=400, detail="Missing identity_token")
+    identity_token = body.identity_token
+    full_name = body.full_name
+    email_hint = body.email
+    locale = body.locale
 
     if not settings.APPLE_CLIENT_ID:
         raise HTTPException(status_code=501, detail="Apple Sign-In is not configured")
@@ -303,7 +314,8 @@ async def apple_auth(
     await invalidate_user_cache(user.id, user.email)
 
     session, raw_token = await create_session(
-        db, user.id, ip_address=ip, user_agent=ua, trust_device=True
+        db, user.id, ip_address=ip, user_agent=ua, trust_device=True,
+        **_fingerprint_headers(request),
     )
     await log_audit_event(
         db, AuditEventType.LOGIN, user.id, ip, ua,
@@ -357,6 +369,7 @@ async def refresh(
     new_session, new_token = await create_session(
         db, user.id, ip_address=ip, user_agent=ua,
         trust_device=was_trusted,
+        **_fingerprint_headers(request),
     )
 
     # Carry over the original master expiry so it doesn't reset on each refresh
@@ -683,12 +696,12 @@ async def send_verification(
 @router.post("/verify-email", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
 async def verify_email(
-    body: dict,
+    body: VerifyEmailRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Verify email with token. No auth required."""
-    raw_token = body.get("token", "")
+    raw_token = body.token
     token = await validate_email_verification_token(db, raw_token)
     if not token:
         raise HTTPException(status_code=400, detail="Invalid or expired verification token")

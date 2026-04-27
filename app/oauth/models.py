@@ -37,6 +37,11 @@ OAUTH_CLIENTS: dict[str, dict] = {
     "autoblogger": {
         "name": "AutoBlogger",
         "allowed_scopes": ["blog:read", "blog:write"],
+        "allowed_redirect_uris": [
+            "https://autoblogger.se/oauth/callback",
+            "https://www.autoblogger.se/oauth/callback",
+            "http://localhost:3002/oauth/callback",
+        ],
     },
 }
 

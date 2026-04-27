@@ -72,7 +72,12 @@ REGLER:
 12. Generera 4-6 FAQ-frågor relevanta för branschen.
 13. Generera 3-4 steg i en process-sektion om relevant.
 14. Generera 2-3 testimonials med realistiska svenska namn.
-15. SEO: Generera BARA title och description i meta. Skippa structured_data och robots — det genereras automatiskt senare.
+15. SEO: Generera title och description i meta. Generera ÄVEN structured_data som JSON-LD i seo.structured_data. Inkludera rätt schema beroende på typ:
+   - LocalBusiness: för lokala företag med adress/telefon. Fält: @type, name, description, url, telephone, email, address (streetAddress, addressLocality, postalCode, addressCountry).
+   - Organization: för alla företag. Fält: @type, name, url, logo, contactPoint.
+   - WebSite: alltid. Fält: @type, name, url.
+   Kombinera flera schemas i en @graph-array: {"@context": "https://schema.org", "@graph": [...]}.
+   Robots sätts automatiskt — skippa robots-fältet.
 16. Använd BARA bild-URL:er som finns i listan med tillgängliga bilder. Hitta INTE PÅ nya URL:er.
 17. STYLE VARIANT: Sidan tilldelas automatiskt en slumpmässig visuell stilvariant (style_variant) EFTER din generering — du behöver INTE ange den.
 18. LOGOTYP: Om logo_url är tom eller saknas i företagsdatan → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp. Logotypen visas i headern — om den inte finns visas företagsnamnet som text istället, vilket är bättre än en felaktig bild.
@@ -671,7 +676,7 @@ REGLER:
 5. Inkludera INTE navigation eller footer — det genereras automatiskt.
 6. CTA-knappar: href MÅSTE matcha en page-slug (t.ex. "/om-oss") eller standard-route ("/contact", "/about", "/services", "/gallery", "/faq"). Använd ALDRIG ankarlänkar (#contact).
 7. Skapa 2-4 undersidor via "pages". Startsidan = korta snippets, undersidor = fullständigt innehåll. Om du skapar en page som ersätter en standard-sektion (about, services, gallery, faq), sätt den top-level sektionen till null.
-8. SEO: Generera BARA title och description i meta.
+8. SEO: Generera title och description i meta. Generera ÄVEN structured_data som JSON-LD i seo.structured_data med @graph-array (LocalBusiness om lokal, Organization, WebSite).
 9. LOGOTYP: Om logotyp-URL är tom eller saknas → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp.
 10. Page-titlar ska vara KORTA (max 2-3 ord): "Om oss", "Tjänster", etc. ALDRIG med företagsnamn.
 

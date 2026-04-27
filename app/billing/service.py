@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
+from app.cache import cache
 from app.billing.models import (
     BillingDetails,
     Payment,
@@ -56,8 +57,6 @@ async def get_or_create_stripe_customer(db: AsyncSession, user: User) -> str:
         return user.stripe_customer_id
 
     customer = stripe.Customer.create(
-        email=user.email,
-        name=user.full_name,
         metadata={"qvicko_user_id": user.id},
     )
     user.stripe_customer_id = customer.id
@@ -150,6 +149,9 @@ async def create_subscription(
     db.add(user)
     await db.flush()
 
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{user.id}")
+
     return subscription
 
 
@@ -201,6 +203,9 @@ async def create_subscription_after_setup(
     db.add(user)
     await db.flush()
 
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{user.id}")
+
     return subscription
 
 
@@ -218,6 +223,10 @@ async def cancel_subscription(db: AsyncSession, user: User) -> Subscription | No
     sub.cancel_at_period_end = True
     db.add(sub)
     await db.flush()
+
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{user.id}")
+
     return sub
 
 
@@ -235,6 +244,10 @@ async def reactivate_subscription(db: AsyncSession, user: User) -> Subscription 
     sub.cancel_at_period_end = False
     db.add(sub)
     await db.flush()
+
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{user.id}")
+
     return sub
 
 
@@ -398,6 +411,10 @@ async def handle_subscription_created(db: AsyncSession, stripe_sub: stripe.Subsc
 
     await db.flush()
 
+    # Invalidate cached subscription check
+    if user_id:
+        await cache.delete(f"sub_active:{user_id}")
+
 
 async def handle_subscription_updated(db: AsyncSession, stripe_sub: stripe.Subscription) -> None:
     """Handle customer.subscription.updated event."""
@@ -410,6 +427,9 @@ async def handle_subscription_updated(db: AsyncSession, stripe_sub: stripe.Subsc
     db.add(sub)
     await db.flush()
 
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{sub.user_id}")
+
 
 async def handle_subscription_deleted(db: AsyncSession, stripe_sub: stripe.Subscription) -> None:
     """Handle customer.subscription.deleted event."""
@@ -421,6 +441,9 @@ async def handle_subscription_deleted(db: AsyncSession, stripe_sub: stripe.Subsc
     sub.cancel_at_period_end = False
     db.add(sub)
     await db.flush()
+
+    # Invalidate cached subscription check
+    await cache.delete(f"sub_active:{sub.user_id}")
 
 
 async def handle_invoice_paid(db: AsyncSession, invoice: stripe.Invoice) -> None:

@@ -106,6 +106,8 @@ class TestPipelineSuccess:
         fake_gen_result = MagicMock()
         fake_gen_result.site_schema = _minimal_site_schema()
         fake_gen_result.tokens_used = 100
+        fake_gen_result.input_tokens = 80
+        fake_gen_result.output_tokens = 20
         fake_gen_result.model = "test-model"
         fake_gen_result.cost_usd = 0.001
 
@@ -211,6 +213,8 @@ class TestPipelineNoContactInfo:
         fake_gen_result = MagicMock()
         fake_gen_result.site_schema = _minimal_site_schema()
         fake_gen_result.tokens_used = 50
+        fake_gen_result.input_tokens = 40
+        fake_gen_result.output_tokens = 10
         fake_gen_result.model = "test-model"
         fake_gen_result.cost_usd = 0.0005
 

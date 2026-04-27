@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,12 +19,42 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("/connect/onboard")
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class OnboardingResponse(BaseModel):
+    """Response for Connect onboarding initiation."""
+    url: str
+    account_id: str
+
+
+class ConnectStatusResponse(BaseModel):
+    """Response for Connect account status check."""
+    connected: bool
+    account_id: str | None = None
+    onboarding_status: str | None = None
+    charges_enabled: bool | None = None
+    payouts_enabled: bool | None = None
+    details_submitted: bool | None = None
+
+
+class RefreshLinkResponse(BaseModel):
+    """Response for refreshing an onboarding link."""
+    url: str
+
+
+class WebhookResponse(BaseModel):
+    """Response for webhook acknowledgement."""
+    received: bool = True
+
+
+@router.post("/connect/onboard", response_model=OnboardingResponse)
 async def start_connect_onboarding(
     body: dict,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> OnboardingResponse:
     """Start Stripe Connect onboarding for a site."""
     from app.payments.models import ConnectedAccount
     from app.payments.service import create_connect_account, create_account_link
@@ -63,7 +94,7 @@ async def start_connect_onboarding(
             refresh_url=refresh_url,
             return_url=return_url,
         )
-        return {"url": link_url, "account_id": account.stripe_account_id}
+        return OnboardingResponse(url=link_url, account_id=account.stripe_account_id)
 
     # Create new Connect account
     result = await create_connect_account(
@@ -93,15 +124,15 @@ async def start_connect_onboarding(
         return_url=return_url,
     )
 
-    return {"url": link_url, "account_id": result["account_id"]}
+    return OnboardingResponse(url=link_url, account_id=result["account_id"])
 
 
-@router.get("/connect/status/{site_id}")
+@router.get("/connect/status/{site_id}", response_model=ConnectStatusResponse)
 async def get_connect_status(
     site_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> ConnectStatusResponse:
     """Get Stripe Connect account status for a site."""
     from app.payments.models import ConnectedAccount
     from app.payments.service import get_account_status
@@ -123,7 +154,7 @@ async def get_connect_status(
     account = account_result.scalar_one_or_none()
 
     if not account:
-        return {"connected": False}
+        return ConnectStatusResponse(connected=False)
 
     # Update status from Stripe
     try:
@@ -139,22 +170,22 @@ async def get_connect_status(
     except Exception:
         logger.exception("Failed to fetch Stripe account status")
 
-    return {
-        "connected": True,
-        "account_id": account.stripe_account_id,
-        "onboarding_status": account.onboarding_status,
-        "charges_enabled": account.charges_enabled,
-        "payouts_enabled": account.payouts_enabled,
-        "details_submitted": account.details_submitted,
-    }
+    return ConnectStatusResponse(
+        connected=True,
+        account_id=account.stripe_account_id,
+        onboarding_status=account.onboarding_status,
+        charges_enabled=account.charges_enabled,
+        payouts_enabled=account.payouts_enabled,
+        details_submitted=account.details_submitted,
+    )
 
 
-@router.post("/connect/refresh-link")
+@router.post("/connect/refresh-link", response_model=RefreshLinkResponse)
 async def refresh_onboarding_link(
     body: dict,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> RefreshLinkResponse:
     """Generate a new onboarding link for an incomplete Connect account."""
     from app.payments.models import ConnectedAccount
     from app.payments.service import create_account_link
@@ -189,14 +220,14 @@ async def refresh_onboarding_link(
         refresh_url=refresh_url,
         return_url=return_url,
     )
-    return {"url": link_url}
+    return RefreshLinkResponse(url=link_url)
 
 
-@router.post("/webhook/connect")
+@router.post("/webhook/connect", response_model=WebhookResponse)
 async def handle_connect_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> WebhookResponse:
     """Handle Stripe Connect webhook events."""
     import stripe
     from app.payments.models import ConnectedAccount
@@ -551,4 +582,4 @@ async def handle_connect_webhook(
         except Exception:
             logger.exception("Failed to send chargeback email")
 
-    return {"received": True}
+    return WebhookResponse(received=True)
