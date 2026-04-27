@@ -165,12 +165,14 @@ async def validate_session(db: AsyncSession, raw_token: str) -> AutoBloggerSessi
     now = datetime.now(timezone.utc)
 
     result = await db.execute(
-        select(AutoBloggerSession).where(
+        select(AutoBloggerSession)
+        .where(
             and_(
                 AutoBloggerSession.token_hash == token_hash,
                 AutoBloggerSession.revoked_at.is_(None),
             )
         )
+        .options(selectinload(AutoBloggerSession.user))
     )
     session = result.scalar_one_or_none()
     if not session:

@@ -174,12 +174,14 @@ async def validate_session(db: AsyncSession, raw_token: str) -> Session | None:
     now = datetime.now(timezone.utc)
 
     result = await db.execute(
-        select(Session).where(
+        select(Session)
+        .where(
             and_(
                 Session.token_hash == token_hash,
                 Session.revoked_at.is_(None),
             )
         )
+        .options(selectinload(Session.user))
     )
     session = result.scalar_one_or_none()
     if not session:
