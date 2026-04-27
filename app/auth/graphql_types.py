@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated, Union
 
 import strawberry
 
@@ -227,9 +228,10 @@ class UpdateProfileSuccess:
     user: UserType | None = None
 
 
-UpdateProfileResult = strawberry.union(
-    "UpdateProfileResult", types=[UpdateProfileSuccess, MutationError]
-)
+UpdateProfileResult = Annotated[
+    Union[UpdateProfileSuccess, MutationError],
+    strawberry.union("UpdateProfileResult"),
+]
 
 @strawberry.type
 class ChangePasswordSuccess:
@@ -237,9 +239,10 @@ class ChangePasswordSuccess:
     success: bool = True
 
 
-ChangePasswordResult = strawberry.union(
-    "ChangePasswordResult", types=[ChangePasswordSuccess, MutationError]
-)
+ChangePasswordResult = Annotated[
+    Union[ChangePasswordSuccess, MutationError],
+    strawberry.union("ChangePasswordResult"),
+]
 
 @strawberry.type
 class RevokeSessionSuccess:
@@ -247,9 +250,10 @@ class RevokeSessionSuccess:
     success: bool = True
 
 
-RevokeSessionResult = strawberry.union(
-    "RevokeSessionResult", types=[RevokeSessionSuccess, MutationError]
-)
+RevokeSessionResult = Annotated[
+    Union[RevokeSessionSuccess, MutationError],
+    strawberry.union("RevokeSessionResult"),
+]
 
 @strawberry.type
 class RevokeAllSessionsSuccess:
@@ -258,9 +262,10 @@ class RevokeAllSessionsSuccess:
     revoked_count: int = 0
 
 
-RevokeAllSessionsResult = strawberry.union(
-    "RevokeAllSessionsResult", types=[RevokeAllSessionsSuccess, MutationError]
-)
+RevokeAllSessionsResult = Annotated[
+    Union[RevokeAllSessionsSuccess, MutationError],
+    strawberry.union("RevokeAllSessionsResult"),
+]
 
 
 @strawberry.type
@@ -270,6 +275,7 @@ class AdminUpdateUserSuccess:
     user: "AdminUserDetailType | None" = None
 
 
-AdminUpdateUserResult = strawberry.union(
-    "AdminUpdateUserResult", types=[AdminUpdateUserSuccess, MutationError]
-)
+AdminUpdateUserResult = Annotated[
+    Union[AdminUpdateUserSuccess, MutationError],
+    strawberry.union("AdminUpdateUserResult"),
+]
