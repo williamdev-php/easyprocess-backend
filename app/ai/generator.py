@@ -406,6 +406,66 @@ def _validate_cta_links(site_data: dict) -> None:
     _walk_and_fix(site_data)
 
 
+def _fix_toggle_consistency(site_data: dict) -> None:
+    """Fix text/toggle inconsistencies in generated data.
+
+    If the AI wrote text referencing a form but set show_form=false,
+    the user sees text about a form but no form. This function fixes
+    such contradictions by enabling the toggle.
+    """
+    # Fix contact section
+    _fix_contact_toggles(site_data.get("contact"))
+
+    # Fix contact sections inside pages
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            for section in (page.get("sections") or []):
+                if isinstance(section, dict) and section.get("type") == "contact":
+                    _fix_contact_toggles(section.get("data"))
+
+    # Fix CTA section
+    cta = site_data.get("cta")
+    if isinstance(cta, dict):
+        if cta.get("button") and cta.get("show_button") is False:
+            logger.info("Fix toggle: CTA has button but show_button=false — enabling")
+            cta["show_button"] = True
+
+    # Fix hero CTA
+    hero = site_data.get("hero")
+    if isinstance(hero, dict):
+        if hero.get("cta") and hero.get("show_cta") is False:
+            logger.info("Fix toggle: Hero has CTA but show_cta=false — enabling")
+            hero["show_cta"] = True
+
+
+def _fix_contact_toggles(contact: dict | None) -> None:
+    """Fix contact section toggle inconsistencies."""
+    if not isinstance(contact, dict):
+        return
+
+    text = (contact.get("text") or "").lower()
+
+    # If text mentions form but show_form is false
+    form_keywords = ["formulär", "form", "fyll i", "skicka meddelande", "skriv till oss"]
+    if any(kw in text for kw in form_keywords) and contact.get("show_form") is False:
+        logger.info("Fix toggle: Contact text mentions form but show_form=false — enabling")
+        contact["show_form"] = True
+
+    # If text mentions phone/contact info but show_info is false
+    info_keywords = ["ring", "telefon", "mejla", "besök", "adress"]
+    if any(kw in text for kw in info_keywords) and contact.get("show_info") is False:
+        logger.info("Fix toggle: Contact text mentions info but show_info=false — enabling")
+        contact["show_info"] = True
+
+    # If both show_form and show_info are explicitly false, enable form as default
+    if contact.get("show_form") is False and contact.get("show_info") is False:
+        logger.info("Fix toggle: Both show_form and show_info are false — enabling show_form")
+        contact["show_form"] = True
+
+
 def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
@@ -463,6 +523,9 @@ def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None
 
     # Validate CTA hrefs — ensure all internal links point to real pages/routes
     _validate_cta_links(site_data)
+
+    # Fix text/toggle inconsistencies
+    _fix_toggle_consistency(site_data)
 
 
 async def generate_site(

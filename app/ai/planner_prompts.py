@@ -76,6 +76,10 @@ Du ska planera SEPARATA UNDERSIDOR utöver startsidan. Varje undersida är en eg
 - Restaurang: startsida + meny + om oss + kontakt.
 - Varje undersida får EGEN lista med sektioner och tips.
 - Startsidan ska ha korta snippets, undersidor fullständigt innehåll.
+- UNDVIK DUBBLETTER: Skapa ALDRIG två sidor med samma syfte!
+  * "Kontakta oss" och "Boka tid" gör SAMMA sak → välj EN.
+  * Kontaktsidan kan ha BÅDE formulär OCH kontaktinfo på samma sida.
+  * Om kunden nämner bokning → gör EN sida med slug "kontakt" eller "boka-tid", INTE båda.
 - Undersidornas sluggar ska vara DYNAMISKA och passa verksamheten:
   * Restaurang: "meny", "om-oss", "kontakt"
   * Frisör: "tjanster", "priser", "boka-tid"

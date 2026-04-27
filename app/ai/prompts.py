@@ -77,6 +77,22 @@ REGLER:
 17. STYLE VARIANT: Sidan tilldelas automatiskt en slumpmässig visuell stilvariant (style_variant) EFTER din generering — du behöver INTE ange den.
 18. LOGOTYP: Om logo_url är tom eller saknas i företagsdatan → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp. Logotypen visas i headern — om den inte finns visas företagsnamnet som text istället, vilket är bättre än en felaktig bild.
 
+KONSISTENS — TEXT OCH TOGGLES:
+Alla boolean-fält (show_form, show_info, show_cta, show_button, show_highlights, show_ratings) styr om något VISAS på sidan.
+- Om texten nämner "fyll i formuläret" → show_form MÅSTE vara true.
+- Om texten nämner "ring oss" → show_info MÅSTE vara true (så telefonnumret visas).
+- Om du har en CTA-knapp definierad → show_cta/show_button MÅSTE vara true.
+- show_form (contact): Visar kontaktformulär. show_info (contact): Visar kontaktkort med email/telefon/adress.
+- show_highlights (about): Visar nyckeltal-rutor (bara på undersidor).
+- show_ratings (testimonials): Visar 5-stjärnig betyg ovanför citat.
+- highlighted (pricing tier): true → Markeras som "Populärast" med ram.
+Minst ETT av show_form/show_info bör vara true på kontaktsidor, annars är sektionen tom.
+
+UNDVIK SIDDOBBLETTER:
+- Skapa ALDRIG två sidor med samma syfte (t.ex. "Kontakta oss" + "Boka tid" med kontaktformulär).
+- Kontaktsidan kan ha BÅDE formulär OCH kontaktinfo på samma sida.
+- Om kunden nämner bokning → gör EN sida, inte två separata.
+
 SECTION_SETTINGS — per-sektion animation:
 Inkludera "section_settings" i din JSON. Variera animationer mellan sektioner.
 Tillgängliga animationer: "fade-up", "fade-in", "slide-left", "slide-right", "scale", "none".
@@ -674,6 +690,14 @@ REGLER:
 8. SEO: Skippa meta.title, meta.description, meta.keywords och seo.structured_data — dessa genereras AUTOMATISKT av backend-kod. Fokusera på bra innehåll.
 9. LOGOTYP: Om logotyp-URL är tom eller saknas → sätt branding.logo_url till null. Använd ALDRIG en vanlig sidbild som logotyp.
 10. Page-titlar ska vara KORTA (max 2-3 ord): "Om oss", "Tjänster", etc. ALDRIG med företagsnamn.
+11. KONSISTENS — Text och toggles MÅSTE matcha:
+    - show_form (contact): true=formulär visas. Om text nämner "fyll i formuläret" → MÅSTE vara true.
+    - show_info (contact): true=visar email/telefon/adress. Om text nämner "ring oss" → MÅSTE vara true.
+    - show_cta (hero): true=visar knapp. show_button (cta): true=visar knapp.
+    - show_highlights (about): true=visar nyckeltal-rutor (bara på undersidor).
+    - highlighted (pricing tier): exakt ETT paket bör vara true.
+    - Minst ETT av show_form/show_info bör vara true på kontaktsidor.
+12. UNDVIK SIDDOBBLETTER: Skapa ALDRIG två sidor med samma syfte (t.ex. "Kontakta oss" + "Boka tid").
 
 {compact_schema}"""
 
@@ -1148,9 +1172,12 @@ REGLER:
 7. SEO genereras automatiskt — skippa meta.title, meta.description, meta.keywords, seo.
 8. LOGOTYP: Om logotyp-URL är tom → sätt branding.logo_url till null.
 9. Använd BARA bild-URL:er från listan. Hitta INTE PÅ nya URL:er.
+10. KONSISTENS: Text och toggles MÅSTE matcha. Om texten nämner formulär → show_form: true. Om texten nämner "ring oss" → show_info: true. Ljug aldrig för besökaren.
 
 UNDERSIDOR SOM KOMMER SKAPAS (använd deras sluggar i CTA-knappar):
 {pages_plan_summary}
+
+{section_reference}
 
 {compact_schema_homepage}"""
 
@@ -1208,6 +1235,9 @@ REGLER:
 5. Använd BARA bild-URL:er från listan. Hitta INTE PÅ nya URL:er.
 6. CTA-knappar: href ska peka till andra undersidors sluggar eller "/".
 7. Inkludera varierade section_settings med animationer.
+8. KONSISTENS: Text och toggles MÅSTE matcha. Om texten säger "fyll i formuläret" → show_form: true. Om texten säger "ring oss" → show_info: true.
+
+{section_reference_compact}
 
 SVAR — JSON med denna struktur:
 {{{{
@@ -1259,6 +1289,7 @@ def build_homepage_prompt(
     industry: str | None = None,
 ) -> tuple[str, str]:
     """Build (system_prompt, user_prompt) for homepage-only generation."""
+    from app.ai.section_reference import SECTION_REFERENCE
 
     # Use homepage_sections if available, fall back to sections
     bp_sections = blueprint.homepage_sections or blueprint.sections
@@ -1277,6 +1308,7 @@ def build_homepage_prompt(
     system_prompt = _HOMEPAGE_SYSTEM_TEMPLATE.format(
         blueprint_json=blueprint_json,
         pages_plan_summary=pages_summary,
+        section_reference=SECTION_REFERENCE,
         compact_schema_homepage=_COMPACT_SCHEMA_HOMEPAGE,
     )
 
@@ -1354,6 +1386,7 @@ def build_page_prompt(
     all_page_slugs: list[str] | None = None,
 ) -> tuple[str, str]:
     """Build (system_prompt, user_prompt) for a single sub-page generation."""
+    from app.ai.section_reference import SECTION_REFERENCE_COMPACT
 
     sections_list = ", ".join(page_plan.sections)
     tips_list = "\n".join(f"  - {t}" for t in page_plan.tips) if page_plan.tips else "Inga specifika tips."
@@ -1367,6 +1400,7 @@ def build_page_prompt(
         tone=_sanitize_for_prompt(blueprint.tone, 200),
         target_audience=_sanitize_for_prompt(blueprint.target_audience, 200),
         content_direction=_sanitize_for_prompt(blueprint.content_direction, 500),
+        section_reference_compact=SECTION_REFERENCE_COMPACT,
         compact_section_schema=_COMPACT_SECTION_SCHEMA,
     )
 
