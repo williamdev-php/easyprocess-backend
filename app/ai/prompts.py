@@ -125,7 +125,7 @@ Utöver startsidan kan du skapa SEPARATA undersidor via "pages"-arrayen.
 REGLER FÖR PAGES:
 - Skapa 2-4 undersidor MAX. Inte fler.
 - Varje sida har: slug, title, meta (SEO), sections (lista av sektionstyper med data).
-- Sektionerna i pages använder SAMMA typer som startsidan: "hero", "about", "services", "features", "faq", "contact", "pricing", "gallery", "process", "testimonials", "cta", "custom_content", "stats", "team", "banner", "video".
+- Sektionerna i pages använder SAMMA typer som startsidan: "hero", "about", "services", "features", "faq", "contact", "pricing", "gallery", "process", "testimonials", "cta", "custom_content", "stats", "team", "banner", "video", "ranking", "quiz".
 - Varje page-sektion har: type (sektionstyp) och data (matchande fält för den typen).
 - parent_slug: sätt till null för toppnivå-sidor. Använd parent_slug för child-sidor (t.ex. parent_slug="tjanster" för en undersida till /tjanster/).
 - show_in_nav: true om sidan ska visas i navigationen, false om den är en child-sida eller dold.

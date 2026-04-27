@@ -44,6 +44,7 @@ TILLGÄNGLIGA SEKTIONER:
 - "custom_content": Fritext-sektion med blandade block.
 - "banner": Fullbredd-meddelande.
 - "ranking": Topplista/jämförelsesektion med rankade objekt.
+- "quiz": Interaktiv quiz/frågeformulär med frågor, alternativ och resultat.
 
 REGLER FÖR SEKTIONSVAL:
 1. "hero" ska ALLTID inkluderas med priority 1.
