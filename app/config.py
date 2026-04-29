@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # Email Verification
     EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
 
+    # Backend URL (for internal API calls, e.g. autoblogger → qvicko)
+    BACKEND_URL: str = "http://localhost:8000"
+
     # Frontend URL (for email links)
     FRONTEND_URL: str = "http://localhost:3000"
 

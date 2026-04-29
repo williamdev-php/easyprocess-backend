@@ -433,9 +433,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.autoblogger.generator import close_http_client as close_ab_gen_client
     from app.autoblogger.images import close_http_client as close_ab_img_client
     from app.autoblogger.integrations.shopify import close_http_client as close_shopify_client
+    from app.auto_blog.generator import close_http_client as close_auto_blog_client
     await close_ab_gen_client()
     await close_ab_img_client()
     await close_shopify_client()
+    await close_auto_blog_client()
     await cache.close()
     await engine.dispose()
     logger.info("Shutdown complete")
@@ -510,6 +512,7 @@ from app.oauth.router import router as oauth_router  # noqa: E402
 from app.oauth.blog_api import router as oauth_blog_router  # noqa: E402
 from app.newsletter.router import router as newsletter_router  # noqa: E402
 from app.sites.ai_chat import router as ai_chat_router  # noqa: E402
+from app.auto_blog.router import router as auto_blog_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(sites_router)
@@ -535,6 +538,7 @@ app.include_router(feyra_router)
 app.include_router(feyra_api_router)
 app.include_router(newsletter_router)
 app.include_router(ai_chat_router)
+app.include_router(auto_blog_router)
 
 # GraphQL
 from app.graphql.schema import graphql_app  # noqa: E402

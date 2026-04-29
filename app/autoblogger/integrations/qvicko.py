@@ -15,8 +15,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# The backend's own URL for internal API calls
-_BACKEND_URL = f"http://localhost:8000"
+# The backend's own base URL for internal API calls
+_BACKEND_URL = settings.BACKEND_URL
 
 _http_client: httpx.AsyncClient | None = None
 
