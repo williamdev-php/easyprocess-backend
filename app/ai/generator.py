@@ -275,42 +275,16 @@ _SECTION_FUZZY_KEYWORDS: dict[str, list[str]] = {
 
 
 def _deduplicate_pages_vs_sections(site_data: dict) -> None:
-    """Null out top-level sections when a custom page covers the same topic.
+    """Keep top-level sections as snippets when a custom page covers the same topic.
 
-    The custom page is always preferred because it contains richer,
-    site-specific content.  Uses exact slug match first, then fuzzy keyword
-    match as fallback.
+    Previously this nulled out the top-level section entirely, which removed
+    homepage snippets (about, services) leaving the homepage bare.
+    Now we KEEP the top-level section as a snippet — the viewer renders it
+    with variant="snippet" on the homepage.
     """
     pages = site_data.get("pages")
     if not isinstance(pages, list) or not pages:
         return
-
-    top_level_slugs = [
-        p.get("slug", "")
-        for p in pages
-        if isinstance(p, dict) and not p.get("parent_slug")
-    ]
-
-    # For each standard section, check if ANY custom page covers it
-    for section_key in ("about", "services", "gallery", "faq", "contact"):
-        if site_data.get(section_key) is None:
-            continue  # Already null
-
-        matched = False
-        for slug in top_level_slugs:
-            # Exact slug match
-            if _PAGE_SLUG_TO_SECTION.get(slug) == section_key:
-                matched = True
-                break
-            # Fuzzy keyword match
-            keywords = _SECTION_FUZZY_KEYWORDS.get(section_key, [])
-            if any(kw in slug for kw in keywords):
-                matched = True
-                break
-
-        if matched:
-            logger.info("Dedup: custom page covers '%s' — nulling section", section_key)
-            site_data[section_key] = None
 
     # Clean up page data
     for p in pages:
@@ -346,34 +320,64 @@ def _validate_cta_links(site_data: dict) -> None:
 
     Checks that internal links (starting with /) point to either a standard
     route or a custom page slug defined in site_data['pages'].
-    Invalid internal links are replaced with '/contact' as a safe fallback.
+    Invalid internal links are replaced with a smart fallback.
     External URLs (http/https/mailto/tel) are left as-is.
     """
-    # Build set of valid internal paths
-    valid_paths = set(_STANDARD_ROUTES)
+    # Build set of valid internal paths from custom pages
+    page_slugs: set[str] = set()
     pages = site_data.get("pages")
     if isinstance(pages, list):
         for p in pages:
             if isinstance(p, dict):
                 slug = p.get("slug", "")
                 if slug:
-                    valid_paths.add(f"/{slug}")
-                    # Also allow parent/child paths
-                    parent = p.get("parent_slug")
-                    if parent:
-                        valid_paths.add(f"/{parent}/{slug}")
+                    page_slugs.add(slug)
+
+    valid_paths: set[str] = set(_STANDARD_ROUTES)
+    for slug in page_slugs:
+        valid_paths.add(f"/{slug}")
+    if isinstance(pages, list):
+        for p in pages:
+            if isinstance(p, dict):
+                parent = p.get("parent_slug")
+                slug = p.get("slug", "")
+                if parent and slug:
+                    valid_paths.add(f"/{parent}/{slug}")
+
+    # Map standard English routes to custom page slugs (e.g. /contact → /kontakt)
+    _STANDARD_TO_CUSTOM: dict[str, str] = {}
+    _slug_keywords = {
+        "contact": ["kontakt", "kontakta", "kontakta-oss", "contact", "boka-tid", "boka", "book"],
+        "about": ["om-oss", "om", "about"],
+        "services": ["tjanster", "services", "behandlingar"],
+        "gallery": ["galleri", "gallery", "projekt"],
+        "faq": ["vanliga-fragor", "faq"],
+    }
+    for standard_key, keywords in _slug_keywords.items():
+        for slug in page_slugs:
+            if slug in keywords or slug == standard_key:
+                _STANDARD_TO_CUSTOM[f"/{standard_key}"] = f"/{slug}"
+                break
+
+    # Pick best fallback: any contact/booking page > /contact > /
+    fallback = "/"
+    _CONTACT_LIKE_SLUGS = ["kontakt", "kontakta-oss", "boka-tid", "boka", "contact", "book"]
+    for cs in _CONTACT_LIKE_SLUGS:
+        if f"/{cs}" in valid_paths:
+            fallback = f"/{cs}"
+            break
 
     def _fix_href(href: str) -> str:
         """Return the href if valid, or a fallback."""
         if not href or not isinstance(href, str):
-            return "/contact"
+            return fallback
         href = href.strip()
         # External URLs, mailto:, tel: are always valid
         if href.startswith(("http://", "https://", "mailto:", "tel:")):
             return href
         # Anchor links are discouraged but not broken
         if href.startswith("#"):
-            return "/contact"
+            return fallback
         # Internal path — must match a known route or page slug
         if href.startswith("/"):
             if href in valid_paths:
@@ -382,13 +386,19 @@ def _validate_cta_links(site_data: dict) -> None:
             normalized = href.rstrip("/")
             if normalized in valid_paths:
                 return normalized
-            logger.info("Validate links: invalid internal href '%s' — replacing with '/contact'", href)
-            return "/contact"
+            # Map standard English routes to custom page slugs
+            # e.g. /contact → /kontakt if a page with slug "kontakt" exists
+            mapped = _STANDARD_TO_CUSTOM.get(normalized)
+            if mapped and mapped in valid_paths:
+                logger.info("Validate links: mapped '%s' → '%s' (custom page)", href, mapped)
+                return mapped
+            logger.info("Validate links: invalid internal href '%s' — replacing with '%s'", href, fallback)
+            return fallback
         # Bare slug without leading slash — add slash and check
         with_slash = f"/{href}"
         if with_slash in valid_paths:
             return with_slash
-        return "/contact"
+        return fallback
 
     def _walk_and_fix(obj):
         """Recursively walk dicts/lists and fix any href fields in CTA/button objects."""
@@ -466,15 +476,411 @@ def _fix_contact_toggles(contact: dict | None) -> None:
         contact["show_form"] = True
 
 
-def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None) -> None:
+def _strip_unknown_contact_fields(site_data: dict) -> None:
+    """Remove fields from contact sections that the viewer doesn't render.
+
+    The AI sometimes invents custom form_fields, contact_info objects, and
+    map_embed iframes. The viewer's ContactSection only uses: title, text,
+    show_form, show_info, show_gradient. Everything else is dead weight.
+    """
+    _VALID_CONTACT_KEYS = {"title", "text", "show_form", "show_info", "show_gradient"}
+
+    def _clean(contact: dict) -> None:
+        extra_keys = [k for k in contact if k not in _VALID_CONTACT_KEYS]
+        for k in extra_keys:
+            del contact[k]
+        if extra_keys:
+            logger.info("Strip contact fields: removed %s", extra_keys)
+
+    # Top-level
+    contact = site_data.get("contact")
+    if isinstance(contact, dict):
+        _clean(contact)
+
+    # Pages
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            for section in (page.get("sections") or []):
+                if isinstance(section, dict) and section.get("type") == "contact":
+                    data = section.get("data")
+                    if isinstance(data, dict):
+                        _clean(data)
+
+
+def _fix_pricing_tiers(pricing: dict | None) -> None:
+    """Fix pricing tiers where price is null.
+
+    The AI sometimes uses tiers as categories (e.g. "Ansiktsbehandlingar")
+    and puts individual prices in the features list instead of the price field.
+    Set price to "Se priser" as fallback so Pydantic doesn't reject it.
+    """
+    if not isinstance(pricing, dict):
+        return
+    tiers = pricing.get("tiers")
+    if not isinstance(tiers, list):
+        return
+    for tier in tiers:
+        if isinstance(tier, dict) and not tier.get("price"):
+            tier["price"] = "Se priser"
+            logger.info("Fix pricing: set null price to 'Se priser' for tier '%s'", tier.get("name", "?"))
+
+
+def _fix_subpage_heroes(site_data: dict) -> None:
+    """Set fullscreen=false on all subpage hero sections.
+
+    Subpages should never have fullscreen heroes — that's reserved for the
+    homepage. A fullscreen hero on /om-oss pushes all content below the fold.
+    """
+    pages = site_data.get("pages")
+    if not isinstance(pages, list):
+        return
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        for section in (page.get("sections") or []):
+            if isinstance(section, dict) and section.get("type") == "hero":
+                data = section.get("data")
+                if isinstance(data, dict) and data.get("fullscreen") is True:
+                    data["fullscreen"] = False
+                    logger.info("Fix subpage hero: set fullscreen=false on /%s", page.get("slug", "?"))
+
+
+def _fix_misleading_ctas(site_data: dict) -> None:
+    """Remove CTA sections with confirmation/thank-you text.
+
+    The AI sometimes generates CTAs like "Din tid är bokad!" or "Tack för
+    din bokning!" which read as post-action confirmations but are actually
+    visible BEFORE the user has done anything. This is confusing.
+    """
+    _CONFIRMATION_PATTERNS = [
+        "din tid är bokad", "tack för din bokning", "bokningen är bekräftad",
+        "vi har mottagit", "bekräftelse skickad", "ditt meddelande har skickats",
+    ]
+
+    pages = site_data.get("pages")
+    if not isinstance(pages, list):
+        return
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        sections = page.get("sections")
+        if not isinstance(sections, list):
+            continue
+
+        cleaned = []
+        for sec in sections:
+            if not isinstance(sec, dict) or sec.get("type") != "cta":
+                cleaned.append(sec)
+                continue
+
+            data = sec.get("data") or {}
+            title = (data.get("title") or "").lower()
+            text = (data.get("text") or "").lower()
+            combined = f"{title} {text}"
+
+            if any(p in combined for p in _CONFIRMATION_PATTERNS):
+                logger.info(
+                    "Fix misleading CTA: removed confirmation-style CTA from /%s: '%s'",
+                    page.get("slug", "?"), data.get("title", ""),
+                )
+                continue
+
+            cleaned.append(sec)
+
+        page["sections"] = cleaned
+
+
+def _restrict_contact_to_contact_page(site_data: dict) -> None:
+    """Remove contact sections from pages that aren't the contact page.
+
+    Contact forms should only exist on the dedicated contact/booking page.
+    Other pages should use CTA buttons linking to the contact page instead.
+    """
+    _CONTACT_SLUGS = {"kontakt", "kontakta-oss", "contact", "boka-tid", "boka", "book"}
+
+    pages = site_data.get("pages")
+    if not isinstance(pages, list):
+        return
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        slug = page.get("slug", "")
+        if slug in _CONTACT_SLUGS:
+            continue  # This IS the contact page — keep it
+
+        sections = page.get("sections")
+        if not isinstance(sections, list):
+            continue
+
+        original_len = len(sections)
+        page["sections"] = [
+            sec for sec in sections
+            if not (isinstance(sec, dict) and sec.get("type") == "contact")
+        ]
+        if len(page["sections"]) < original_len:
+            logger.info(
+                "Restrict contact: removed contact section from page /%s (not the contact page)",
+                slug,
+            )
+
+
+def _clean_section_settings(site_data: dict) -> None:
+    """Remove section_settings entries for sections that don't exist."""
+    settings = site_data.get("section_settings")
+    if not isinstance(settings, dict):
+        return
+
+    order = site_data.get("section_order") or []
+    pages = site_data.get("pages") or []
+
+    # Build set of valid setting keys
+    valid_keys: set[str] = set(order)
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        slug = page.get("slug", "")
+        for section in (page.get("sections") or []):
+            if isinstance(section, dict) and section.get("type"):
+                valid_keys.add(f"{slug}_{section['type']}")
+
+    to_remove = [k for k in settings if k not in valid_keys]
+    for k in to_remove:
+        del settings[k]
+    if to_remove:
+        logger.info("Clean section_settings: removed %d stale entries: %s", len(to_remove), to_remove)
+
+
+def _fix_self_referencing_ctas(site_data: dict) -> None:
+    """Fix CTAs on pages that point to themselves.
+
+    E.g. a hero CTA on /kontakt pointing to /kontakt is useless.
+    Replace with "/" (homepage) or remove the CTA.
+    """
+    pages = site_data.get("pages")
+    if not isinstance(pages, list):
+        return
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        slug = page.get("slug", "")
+        if not slug:
+            continue
+        page_path = f"/{slug}"
+
+        for section in (page.get("sections") or []):
+            if not isinstance(section, dict):
+                continue
+            data = section.get("data")
+            if not isinstance(data, dict):
+                continue
+
+            # Check CTA button
+            for key in ("cta", "button"):
+                btn = data.get(key)
+                if isinstance(btn, dict) and btn.get("href") == page_path:
+                    # Replace self-reference with scroll-to-content or homepage
+                    # For hero on a page, just hide the CTA — you're already there
+                    stype = section.get("type", "")
+                    if stype == "hero":
+                        logger.info(
+                            "Fix self-ref: page /%s hero CTA pointed to itself — hiding CTA",
+                            slug,
+                        )
+                        data["show_cta"] = False
+                        data.pop("cta", None)
+                    else:
+                        # For CTA sections, point to homepage instead
+                        logger.info(
+                            "Fix self-ref: page /%s %s button pointed to itself — changed to /",
+                            slug, stype,
+                        )
+                        btn["href"] = "/"
+
+
+def _clean_section_order(site_data: dict) -> None:
+    """Remove entries from section_order where the section data is null."""
+    order = site_data.get("section_order")
+    if not isinstance(order, list):
+        return
+
+    _SECTION_KEYS = {
+        "hero", "about", "features", "stats", "services", "process",
+        "gallery", "team", "testimonials", "faq", "cta", "contact",
+        "pricing", "video", "logo_cloud", "custom_content", "banner",
+        "ranking", "quiz",
+    }
+
+    cleaned = []
+    for key in order:
+        if key in _SECTION_KEYS and site_data.get(key) is None:
+            logger.info("Clean section_order: removed '%s' (data is null)", key)
+            continue
+        cleaned.append(key)
+
+    site_data["section_order"] = cleaned
+
+
+def _remove_empty_galleries(site_data: dict) -> None:
+    """Remove gallery sections that have no images (all url:null stripped)."""
+    # Top-level gallery
+    gallery = site_data.get("gallery")
+    if isinstance(gallery, dict):
+        images = gallery.get("images") or []
+        if not images or not any(isinstance(img, dict) and img.get("url") for img in images):
+            site_data["gallery"] = None
+            logger.info("Remove empty gallery: top-level gallery has no valid images")
+
+    # Page galleries
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            sections = page.get("sections")
+            if not isinstance(sections, list):
+                continue
+            page["sections"] = [
+                sec for sec in sections
+                if not _is_empty_gallery(sec)
+            ]
+
+
+def _is_empty_gallery(section: dict) -> bool:
+    """Check if a section is a gallery with no valid images."""
+    if not isinstance(section, dict) or section.get("type") != "gallery":
+        return False
+    data = section.get("data") or {}
+    images = data.get("images") or []
+    has_valid = any(isinstance(img, dict) and img.get("url") for img in images)
+    if not has_valid:
+        logger.info("Remove empty gallery: page gallery has no valid images")
+        return True
+    return False
+
+
+def _remove_fabricated_teams(site_data: dict, *, has_real_team: bool) -> None:
+    """Remove team sections if no real team data was provided.
+
+    AI tends to fabricate team members with realistic-sounding names.
+    Publishing fake team members is harmful for trust and credibility.
+    """
+    if has_real_team:
+        return  # Real team data exists — keep it
+
+    # Top-level
+    if site_data.get("team"):
+        logger.info("Remove fabricated team: no real team data — removing top-level team")
+        site_data["team"] = None
+
+    # Pages
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            sections = page.get("sections")
+            if not isinstance(sections, list):
+                continue
+            original_len = len(sections)
+            page["sections"] = [
+                sec for sec in sections
+                if not (isinstance(sec, dict) and sec.get("type") == "team")
+            ]
+            if len(page["sections"]) < original_len:
+                logger.info(
+                    "Remove fabricated team: no real team data — removed from page /%s",
+                    page.get("slug", "?"),
+                )
+
+
+def _enforce_business_info(site_data: dict, texts: dict | None) -> None:
+    """Restore business contact info if the AI reformatted it.
+
+    The AI sometimes changes phone format (060-123 → +46 60 123) or
+    alters the address. We trust the original input.
+    """
+    if not texts:
+        return
+    biz = site_data.get("business")
+    if not isinstance(biz, dict):
+        return
+
+    # These fields come from the original input and should not be changed
+    # They are passed via texts or directly. Check common sources.
+    # Note: texts dict doesn't always carry phone/email but generate_site
+    # receives them as separate params. We handle what we can.
+
+
+def _enforce_input_colors(site_data: dict, input_colors: dict | None) -> None:
+    """Restore input colors if the AI changed them.
+
+    The AI sometimes replaces carefully chosen brand colors with generic ones.
+    If colors were provided as input, they should always be used.
+    """
+    if not input_colors:
+        return
+    branding = site_data.get("branding")
+    if not isinstance(branding, dict):
+        return
+    colors = branding.get("colors")
+    if not isinstance(colors, dict):
+        branding["colors"] = dict(input_colors)
+        logger.info("Enforce colors: branding.colors was missing — set from input")
+        return
+
+    changed = []
+    for key in ("primary", "secondary", "accent", "background", "text"):
+        if key in input_colors and input_colors[key]:
+            if colors.get(key) != input_colors[key]:
+                changed.append(f"{key}: {colors.get(key)} → {input_colors[key]}")
+                colors[key] = input_colors[key]
+    if changed:
+        logger.info("Enforce colors: restored %d input colors: %s", len(changed), ", ".join(changed))
+
+
+def _sanitize_ai_output(
+    site_data: dict,
+    *,
+    original_logo_url: str | None = None,
+    input_colors: dict | None = None,
+    texts: dict | None = None,
+    input_email: str | None = None,
+    input_phone: str | None = None,
+    input_address: str | None = None,
+) -> None:
     """Fix common AI generation issues before Pydantic validation.
 
+    - Enforce input colors over AI-chosen colors
     - Remove gallery images with null/empty URLs
     - Replace null strings with empty strings for required string fields
     - Validate logo_url against the original input
+    - Fix self-referencing CTAs, section_order, empty galleries, fabricated teams
     """
     # Promote home-page sections from pages[] to top level if needed
     _promote_home_page_sections(site_data)
+
+    # Enforce input colors — AI must not override brand colors
+    _enforce_input_colors(site_data, input_colors)
+
+    # Enforce original contact info — AI must not reformat phone/email/address
+    biz = site_data.get("business")
+    if isinstance(biz, dict):
+        if input_email and biz.get("email") != input_email:
+            logger.info("Enforce business: email restored '%s' → '%s'", biz.get("email"), input_email)
+            biz["email"] = input_email
+        if input_phone and biz.get("phone") != input_phone:
+            logger.info("Enforce business: phone restored '%s' → '%s'", biz.get("phone"), input_phone)
+            biz["phone"] = input_phone
+        if input_address and biz.get("address") != input_address:
+            logger.info("Enforce business: address restored '%s' → '%s'", biz.get("address"), input_address)
+            biz["address"] = input_address
 
     # Validate logo: if no logo was provided to the generator, the AI must not
     # use a page image as logo.  Null it out so the viewer shows business name.
@@ -509,6 +915,16 @@ def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None
                 if str_field in block and block[str_field] is None:
                     block[str_field] = ""
 
+    # Fix pricing tiers with null price (AI sometimes puts prices in features instead)
+    _fix_pricing_tiers(site_data.get("pricing"))
+    pages = site_data.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if isinstance(page, dict):
+                for sec in (page.get("sections") or []):
+                    if isinstance(sec, dict) and sec.get("type") == "pricing":
+                        _fix_pricing_tiers(sec.get("data"))
+
     # Validate section_settings animation values
     valid_anims = {"fade-up", "fade-in", "slide-left", "slide-right", "scale", "none"}
     settings = site_data.get("section_settings")
@@ -526,6 +942,34 @@ def _sanitize_ai_output(site_data: dict, *, original_logo_url: str | None = None
 
     # Fix text/toggle inconsistencies
     _fix_toggle_consistency(site_data)
+
+    # Strip unknown fields from contact sections that the viewer doesn't render
+    _strip_unknown_contact_fields(site_data)
+
+    # Fix self-referencing CTAs on pages (button linking to the page you're on)
+    _fix_self_referencing_ctas(site_data)
+
+    # Clean section_order: remove entries where section data is null
+    _clean_section_order(site_data)
+
+    # Remove gallery sections with no images (inside pages too)
+    _remove_empty_galleries(site_data)
+
+    # Remove fabricated team members if no real team data was provided
+    has_real_team = bool(texts and texts.get("team_members"))
+    _remove_fabricated_teams(site_data, has_real_team=has_real_team)
+
+    # Ensure contact forms only appear on the dedicated contact page
+    _restrict_contact_to_contact_page(site_data)
+
+    # Fix subpage heroes: never fullscreen on subpages
+    _fix_subpage_heroes(site_data)
+
+    # Remove misleading CTA sections (e.g. "Din tid är bokad!" shown before booking)
+    _fix_misleading_ctas(site_data)
+
+    # Clean stale section_settings entries
+    _clean_section_settings(site_data)
 
 
 async def generate_site(
@@ -646,7 +1090,10 @@ async def generate_site(
             install_apps = [s for s in install_apps if isinstance(s, str)]
 
             _strip_unknown_keys(site_data)
-            _sanitize_ai_output(site_data, original_logo_url=logo_url)
+            _sanitize_ai_output(
+                site_data, original_logo_url=logo_url, input_colors=colors,
+                texts=texts, input_email=email, input_phone=phone, input_address=address,
+            )
 
             # Auto-generate SEO fields from content
             from app.ai.seo_generator import generate_seo
@@ -848,7 +1295,10 @@ async def orchestrate_site_generation(
 
     # --- Step 5: Standard sanitization ---
     _strip_unknown_keys(site_data)
-    _sanitize_ai_output(site_data, original_logo_url=logo_url)
+    _sanitize_ai_output(
+        site_data, original_logo_url=logo_url, input_colors=colors,
+        texts=texts, input_email=email, input_phone=phone, input_address=address,
+    )
 
     site_data["style_variant"] = random.randint(0, TOTAL_STYLE_VARIANTS - 1)
     site_data["viewer_version"] = CURRENT_VIEWER_VERSION

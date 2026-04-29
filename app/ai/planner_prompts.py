@@ -51,8 +51,10 @@ REGLER FÖR SEKTIONSVAL:
 2. Välj sektioner INTELLIGENT baserat på syfte, bransch och tillgänglig info.
 3. En enkel verksamhet behöver 3-5 sektioner på startsidan. Större företag 5-8.
 4. Inkludera ALDRIG alla sektioner. Tomma/generiska sektioner är värre än inga.
-5. "pricing", "team", "ranking", "video", "logo_cloud" — bara om det verkligen passar.
+5. "pricing", "ranking", "video", "logo_cloud" — bara om det verkligen passar.
 6. Ordna sektioner i optimal visningsordning.
+7. "gallery" — BARA om bilder finns (se bildinfo nedan). Om 0 bilder → inkludera ALDRIG gallery.
+8. "team" — BARA om teammedlemmar nämnts i beskrivningen eller finns i scrapad data. Hitta ALDRIG PÅ teammedlemmar — det skapar falsk information som kan publiceras.
 
 IDENTIFIERA SYFTE:
 - Företagssida (restaurang, frisör, byggfirma, etc.) → professionell ton, fokus på tjänster och CTA.
@@ -64,7 +66,7 @@ IDENTIFIERA SYFTE:
 BILDPLACERING:
 - Om få bilder (1-3): hero-bakgrund + ev. about.
 - Om flera bilder (4+): hero + gallery.
-- Om inga bilder: skippa gallery, fokusera på text-sektioner.
+- Om inga bilder (0): skippa gallery HELT — inkludera INTE gallery i varken homepage_sections eller pages_plan.
 
 UNDERSIDOR (pages_plan):
 Du ska planera SEPARATA UNDERSIDOR utöver startsidan. Varje undersida är en egen sida med eget fokus.
@@ -80,6 +82,10 @@ Du ska planera SEPARATA UNDERSIDOR utöver startsidan. Varje undersida är en eg
   * "Kontakta oss" och "Boka tid" gör SAMMA sak → välj EN.
   * Kontaktsidan kan ha BÅDE formulär OCH kontaktinfo på samma sida.
   * Om kunden nämner bokning → gör EN sida med slug "kontakt" eller "boka-tid", INTE båda.
+- KONTAKTFORMULÄR: "contact"-sektionen (med formulär) ska BARA finnas på kontakt/boka-sidan.
+  * Lägg ALDRIG "contact" som sektion på tjänster-, om oss- eller andra sidor.
+  * Använd "cta" med knapp till kontaktsidan istället — det räcker.
+  * Startsidan kan ha en contact-snippet (kort text + info) men formuläret visas bara på kontaktsidan.
 - Undersidornas sluggar ska vara DYNAMISKA och passa verksamheten:
   * Restaurang: "meny", "om-oss", "kontakt"
   * Frisör: "tjanster", "priser", "boka-tid"

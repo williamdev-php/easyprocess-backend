@@ -46,10 +46,19 @@ def _ensure_meta(site_data: dict) -> None:
 
 
 def _truncate(text: str, max_len: int) -> str:
-    """Truncate text to max_len, breaking at word boundary."""
+    """Truncate text to max_len, preferring sentence boundaries."""
     if not text or len(text) <= max_len:
         return text
-    truncated = text[:max_len].rsplit(" ", 1)[0]
+
+    # Try to break at sentence boundary within limit
+    candidate = text[:max_len]
+    for end_char in (".", "!", "?"):
+        last_sentence = candidate.rfind(end_char)
+        if last_sentence > max_len // 3:  # At least 1/3 of max_len used
+            return text[:last_sentence + 1]
+
+    # Fallback: break at word boundary
+    truncated = candidate.rsplit(" ", 1)[0]
     return truncated.rstrip(".,;: ") + "…"
 
 
@@ -79,23 +88,26 @@ def _get_business_tagline(site_data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _generate_meta_title(site_data: dict) -> None:
+    """Generate site-level meta title.
+
+    This title is used as the SUFFIX in page titles by the viewer:
+      "${page.title} | ${site.meta.title}"
+    So it should be the business identity — not a full SEO sentence.
+    """
     meta = site_data["meta"]
     if meta.get("title"):
         return  # AI already provided
 
     name = _get_business_name(site_data)
     tagline = _get_business_tagline(site_data)
-    hero = site_data.get("hero") or {}
-    headline = _extract_text(hero, "headline")
 
-    if tagline:
-        title = f"{name} | {tagline}"
-    elif headline:
-        title = f"{name} | {headline}"
+    # Keep it short — this gets appended to every page title
+    if tagline and len(f"{name} — {tagline}") <= 50:
+        title = f"{name} — {tagline}"
     else:
         title = name
 
-    meta["title"] = _truncate(title, 60)
+    meta["title"] = _truncate(title, 50)
 
 
 # ---------------------------------------------------------------------------
@@ -107,31 +119,33 @@ def _generate_meta_description(site_data: dict) -> None:
     if meta.get("description"):
         return
 
-    parts: list[str] = []
-
+    # Try hero subtitle first — it's usually the best one-liner
     hero = site_data.get("hero") or {}
     subtitle = _extract_text(hero, "subtitle")
-    if subtitle:
-        parts.append(subtitle)
 
     about = site_data.get("about") or {}
     about_text = _extract_text(about, "text")
-    if about_text:
-        # Take first sentence
+
+    if subtitle and about_text:
+        # Combine subtitle + first sentence of about, avoid duplication
         first_sentence = re.split(r"[.!?]", about_text, maxsplit=1)[0].strip()
-        if first_sentence and first_sentence not in parts:
-            parts.append(first_sentence)
-
-    if not parts:
+        if first_sentence and first_sentence.lower() != subtitle.lower():
+            # Ensure subtitle ends with punctuation before joining
+            sub = subtitle.rstrip(".")
+            description = f"{sub}. {first_sentence}."
+        else:
+            description = subtitle if subtitle.endswith(".") else subtitle + "."
+    elif subtitle:
+        description = subtitle if subtitle.endswith(".") else subtitle + "."
+    elif about_text:
+        first_sentence = re.split(r"[.!?]", about_text, maxsplit=1)[0].strip()
+        description = first_sentence + "." if first_sentence else ""
+    else:
         tagline = _get_business_tagline(site_data)
-        if tagline:
-            parts.append(tagline)
+        description = tagline + "." if tagline else ""
 
-    description = ". ".join(parts)
-    if description and not description.endswith("."):
-        description += "."
-
-    meta["description"] = _truncate(description, 160)
+    if description:
+        meta["description"] = _truncate(description, 160)
 
 
 # ---------------------------------------------------------------------------
@@ -321,12 +335,13 @@ def _generate_page_meta(site_data: dict) -> None:
         page_meta = page["meta"]
         page_title = _extract_text(page, "title")
 
-        # Meta title
+        # Meta title — ONLY the page's own title, never business name.
+        # The viewer combines: "${page.meta.title} | ${site.meta.title}"
+        # so including business name here would cause duplication like:
+        # "Kontakt | Firma AB | Firma AB | Tagline"
         if not page_meta.get("title"):
-            if page_title and biz_name != "Untitled":
-                page_meta["title"] = _truncate(f"{page_title} | {biz_name}", 60)
-            elif page_title:
-                page_meta["title"] = _truncate(page_title, 60)
+            if page_title:
+                page_meta["title"] = _truncate(page_title, 40)
 
         # Meta description — extract from the page's first text-heavy section
         if not page_meta.get("description"):
